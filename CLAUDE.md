@@ -2,6 +2,26 @@
 
 조직 지시 및 업무 흐름 관리 플랫폼 웹 프론트엔드 리포 (`flowmeet-web`). API 서버는 별도 리포 (`../flowmeet-api`).
 
+## 작업 시작 규칙 (필수)
+
+**어떤 작업이든 반드시 전용 브랜치를 만들어 진행한다. `main`에 직접 커밋 금지.**
+
+- 작업 착수 시 가장 먼저 `main`에서 새 브랜치를 분기한다.
+- 브랜치 명명 규약: `<type>/<issue-number>-<slug>`
+  - `type`: `feature` / `fix` / `refactor` / `chore` / `docs` / `test`
+  - 예: `feature/5-meeting-list`, `fix/12-recording-button`, `docs/3-readme`
+- 이슈 번호가 없는 작업은 `<type>/<slug>` (예: `chore/update-tailwind`).
+- 작업 완료 후 PR을 생성해 `main`으로 머지 — 직접 푸시 금지.
+
+```bash
+# 올바른 착수 흐름
+git checkout main && git pull
+git checkout -b feature/<issue>-<slug>
+# ... 작업 ...
+git push -u origin feature/<issue>-<slug>
+gh pr create --fill
+```
+
 ## 기술 스택
 
 - Next.js 16 (App Router) + React 19 + TypeScript 5
