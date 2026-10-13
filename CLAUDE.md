@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-조직 지시 및 업무 흐름 관리 플랫폼 프론트엔드 리포. 백엔드는 별도 리포 (`../backend`).
+조직 지시 및 업무 흐름 관리 플랫폼 웹 프론트엔드 리포 (`flowmeet-web`). API 서버는 별도 리포 (`../flowmeet-api`).
 
 ## 기술 스택
 
@@ -12,7 +12,7 @@
 ## 디렉터리 구조
 
 ```text
-frontend/
+flowmeet-web/
 ├─ src/app/              # App Router 페이지 및 레이아웃
 │  ├─ layout.tsx
 │  ├─ page.tsx
@@ -47,7 +47,7 @@ npm run lint
 
 | 변수 | 설명 |
 | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | 백엔드 API 베이스 URL (기본: `http://localhost:8080`) |
+| `NEXT_PUBLIC_API_BASE_URL` | `flowmeet-api` 베이스 URL (기본: `http://localhost:8080`) |
 
 `NEXT_PUBLIC_` 접두사가 없는 값은 서버 전용. 비밀값은 반드시 서버 컴포넌트/Route Handler에서만 사용.
 
@@ -62,7 +62,7 @@ npm run lint
 
 ## API 통신
 
-- 백엔드 베이스 URL: `process.env.NEXT_PUBLIC_API_BASE_URL`
+- `flowmeet-api` 베이스 URL: `process.env.NEXT_PUBLIC_API_BASE_URL`
 - 인증: `Authorization: Bearer <accessToken>`
 - Refresh Token은 쿠키 또는 안전한 스토리지에 보관 (XSS 리스크 고려)
 - API 클라이언트는 `src/lib/api/`에 레이어로 분리 예정

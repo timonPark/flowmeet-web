@@ -1,12 +1,12 @@
-# flowmeet-frontend
+# flowmeet-web
 
-조직 지시 및 업무 흐름 관리 플랫폼 프론트엔드.
+조직 지시 및 업무 흐름 관리 플랫폼 웹 프론트엔드.
 
 - Next.js 16 (App Router) + TypeScript
 - Tailwind CSS 4
 - ESLint 9
 
-백엔드 리포: `../backend` (별도 리포로 분리됨)
+API 리포: `../flowmeet-api` (별도 리포로 분리됨)
 
 ## 사전 요구사항
 
@@ -32,12 +32,12 @@ npm run dev
 
 | 변수명 | 설명 |
 | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | 백엔드 API 베이스 URL (기본: `http://localhost:8080`) |
+| `NEXT_PUBLIC_API_BASE_URL` | `flowmeet-api` 베이스 URL (기본: `http://localhost:8080`) |
 
 ## 디렉터리 구조
 
 ```text
-frontend/
+flowmeet-web/
 ├─ src/app/           # App Router 페이지
 ├─ public/            # 정적 자산
 ├─ next.config.ts
