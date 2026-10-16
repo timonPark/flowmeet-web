@@ -32,7 +32,7 @@ depends_on:
 | RQ 쿼리 기본 | **`throwOnError: true`** → 섹션 ErrorBoundary 로 bubbling |
 | RQ 뮤테이션 기본 | **전역 `onError` → 토스트** (`uiStore.toast.error`) |
 | 비-폼 Server Action | **`ActionResult<T>`** (폼의 `FormActionResult` 와 shape 통일) |
-| 로깅 훅 | **`reportError(err, context)`** 추상 — Sentry 교체는 #8 |
+| 로깅 훅 | **`reportError(err, context)`** 추상 — 외부 벤더 미도입, 구현은 #8 에서 결정 |
 
 **원칙**: *경계는 "실패 시 폴백이 더 유용한 지점" 에만 둔다. 토스트는 비동기 결과 알림, 인라인은 사용자 액션에 묶인 문맥, 풀페이지는 섹션/루트 복구 실패.*
 
@@ -78,7 +78,7 @@ src/lib/errors/
 ├─ codes.ts             # type ApiErrorCode = 'AUTH_INVALID' | 'MEETING_NOT_FOUND' | ... | 'UNKNOWN'
 ├─ messages.ts          # codeToMessage(code, fallback): string
 ├─ handle.ts            # handleApiError(err, { onToast, onInline, onRedirect })
-├─ reportError.ts       # 추상 로깅 훅 (#8 까지 console.error, 이후 Sentry)
+├─ reportError.ts       # 추상 로깅 훅 (구조화 JSON console.error, #8 결정)
 └─ ErrorBoundary.tsx    # react-error-boundary 래퍼 (reportError 호출 포함)
 ```
 
@@ -216,7 +216,7 @@ type Ctx = { source: string; extra?: Record<string, unknown> };
 
 export function reportError(err: unknown, ctx: Ctx): void {
   // 지금: console.error
-  // #8 결정 후 Sentry.captureException(err, { tags: { source: ctx.source }, extra: ctx.extra }) 로 교체
+  // #8 결정: 외부 벤더 미도입. 구조화 JSON console.error 유지. 상세는 logging-monitoring.md
   console.error('[reportError]', ctx.source, err, ctx.extra);
 }
 ```
@@ -233,7 +233,7 @@ export function reportError(err: unknown, ctx: Ctx): void {
 | [#2](https://github.com/timonPark/flowmeet-web/issues/2) 데이터 페칭 | fetch wrapper 가 던지는 `ApiError` shape 가 이 축의 §C 와 정합해야 함. 변경 없음. |
 | [#3](https://github.com/timonPark/flowmeet-web/issues/3) 상태 관리 | `uiStore.toast` API (severity, deduping) 를 명시적으로 요구. |
 | [#4](https://github.com/timonPark/flowmeet-web/issues/4) 폼/검증 | `src/lib/validation/errors.ts` 가 `codeToMessage` import. 중복 메시지 테이블 금지. |
-| [#8](https://github.com/timonPark/flowmeet-web/issues/8) 로깅/모니터링 | `reportError` 구현만 Sentry 로 교체. 인터페이스 유지. |
+| [#8](https://github.com/timonPark/flowmeet-web/issues/8) 로깅/모니터링 | 외부 벤더 미도입 결정. `reportError` 는 구조화 JSON console.error. 자체 수집 엔드포인트는 defer. |
 | [#7](https://github.com/timonPark/flowmeet-web/issues/7) i18n | `MESSAGES` 테이블을 번역 리소스로 치환. 함수 시그니처 유지. |
 | [#13](https://github.com/timonPark/flowmeet-web/issues/13) `nextjs16-reality-check` | Next 16 에서 `error.tsx` 는 "use client" 필수 — 가드에 포함. |
 | [#15](https://github.com/timonPark/flowmeet-web/issues/15) `app-router-layering` | `src/lib/errors/` 디렉터리 책임 포함. |
@@ -248,7 +248,7 @@ export function reportError(err: unknown, ctx: Ctx): void {
 |---|---|---|
 | 토스트 UI 라이브러리 (Sonner / 자체 구현) | UI 디자인 확정 때 재검토. 지금은 `uiStore.toast` 추상 API 만. | UI 구현 단계 |
 | `ApiErrorCode` union 초기 리스트 | 실제 쓰이는 지점이 생길 때 추가. 지금은 뼈대만. | 각 피처 이슈 |
-| Sentry/모니터링 통합 | `reportError` 구현 교체만 | #8 |
+| 자체 백엔드 수집 엔드포인트·구조화 서버 로그 | `reportError` 구현 교체만 | #8 결정 → logging-monitoring.md |
 | 에러 메시지 i18n | `MESSAGES` 테이블을 번역 리소스로 치환 | #7 |
 | 섹션 그룹 라우트 구조 | `(dashboard)` / `(meeting)` 등 그룹 라우트 설계 — `app-router-layering` 과 함께 | #15 |
 

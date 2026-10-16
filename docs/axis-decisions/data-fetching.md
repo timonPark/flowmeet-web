@@ -92,7 +92,7 @@ flowmeet-web은 Next.js 16.4 (`cacheComponents: true` + `partialPrefetching: tru
 | 영향 받는 축 / 이슈 | 내용 |
 |---|---|
 | [#5](https://github.com/timonPark/flowmeet-web/issues/5) 에러 처리 | fetch wrapper 가 던지는 `ApiError` 가 `error-ux` 입력. api `ErrorCode` → 사용자 메시지 매핑 테이블 필요. |
-| [#8](https://github.com/timonPark/flowmeet-web/issues/8) 로깅/모니터링 | 서버/클라 wrapper 양쪽에 Sentry 등 훅 포인트. |
+| [#8](https://github.com/timonPark/flowmeet-web/issues/8) 로깅/모니터링 | 서버/클라 wrapper 양쪽에 `reportError` 훅 포인트. 외부 벤더 미도입 (구조화 JSON console.error 유지). |
 | [#9](https://github.com/timonPark/flowmeet-web/issues/9) 운영 규정 | 캐시 태그 네이밍 규약 ("`<domain>:<id>`") 을 PR 체크리스트에 포함. |
 | [#13](https://github.com/timonPark/flowmeet-web/issues/13) `nextjs16-reality-check` | Opus/Sonnet 가 "`fetch` 는 기본 캐시" 라고 전제하는 코드를 쓰면 틀림. 가드 포인트로 명시. |
 | [#15](https://github.com/timonPark/flowmeet-web/issues/15) `app-router-layering` | `src/lib/api/{serverClient,browserClient,_core}.ts` 경계를 레이어링 룰에 포함. |

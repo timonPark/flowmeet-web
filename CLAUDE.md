@@ -124,7 +124,7 @@ npm run lint
 - RQ 기본: `queries.throwOnError: true` (섹션 ErrorBoundary 로 bubbling), `mutations.onError: 전역 토스트`. 호출부가 override 가능.
 - 비-폼 Server Action 은 `ActionResult<T>` (ok discriminated union). 폼 `FormActionResult` 와 shape 통일. **throw 금지**.
 - 토스트는 `uiStore.toast.{error,success,...}` 추상 API. 중복 deduping은 `uiStore` 가 보장.
-- 로깅 훅: **`reportError(err, ctx)`** 추상. 지금은 `console.error`, #8 후 Sentry 로 **구현만 교체**.
+- 로깅 훅: **`reportError(err, ctx)`** 추상. **외부 SaaS 벤더 미도입** (#8). 구현은 `src/lib/errors/reportError.ts` 가 **구조화 JSON `console.error`**. 추후 자체 백엔드 수집 엔드포인트 생기면 함수 내부에서 조건부 fetch 추가 — 호출부 변경 없음.
 
 ## 테스트
 
@@ -164,6 +164,18 @@ npm run lint
 - **금지**: 임의 hex inline, `bg-red-500` 등 Tailwind 기본 색상 scale 직접 참조, `dark:` 유틸, `tailwind.config.ts` 색상 선언, 임의 spacing.
 - 폰트: **Pretendard** (`next/font/local` self-host) + `system-ui` 폴백.
 - 반응형 breakpoint 는 Tailwind 기본 유지.
+
+## 로깅 · 에러 모니터링
+
+> 상세: [`docs/axis-decisions/logging-monitoring.md`](docs/axis-decisions/logging-monitoring.md) (이슈 #8)
+
+- **외부 벤더 미도입** — Sentry·Datadog·LogRocket·GlitchTip 등 전부 X. 사용자가 명시 요청하기 전까지 재제안 금지.
+- `reportError(err, ctx)` 구현: **구조화 JSON** 을 `console.error` 로 출력. `{ ts, level, source, userId, message, name, stack, extra }` shape.
+- 사용자 식별: **opaque `userId`** 만. 이메일/이름/전화 등 PII 금지.
+- 민감정보 마스킹: `maskSensitive(obj)` 가 `password|token|secret|authorization|cookie|email|phone` 등 알려진 키를 재귀로 `'***'` 치환. 상세 정책은 #19 `web-security`.
+- **클라→서버 수집 엔드포인트**는 열어둠 — flowmeet-api 설계 완료 시 `reportError` 내부에서 조건부 fetch 로 전송. 호출부 변경 없음.
+- 서버 일반 로그는 지금 `console.*` 만. 구조화 로깅·수집 (`pino` 등) 은 **배포 플랫폼 결정 후**.
+- 클라이언트 일반 로그는 **수집하지 않는다**. 모든 통찰은 에러 payload 로.
 
 ## 참고 문서
 

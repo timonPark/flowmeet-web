@@ -275,7 +275,7 @@ src/messages/
 | [#4](https://github.com/timonPark/flowmeet-web/issues/4) 폼/검증 | zod `errorMap` + `src/messages/ko.json#validation` 로 메시지 i18n. 공용 폼 컴포넌트에 `aria-invalid`/`aria-describedby` 기본 제공 (이미 §4 결정에 반영). |
 | [#5](https://github.com/timonPark/flowmeet-web/issues/5) 에러 처리 | `errors/messages.ts` 가 `useTranslations('errors')` 호출로 교체. 함수 시그니처 유지. |
 | [#6](https://github.com/timonPark/flowmeet-web/issues/6) 테스트 | `@axe-core/playwright` 가 E2E 에 추가. `expectNoA11yViolations` fixture 공용 유틸. |
-| [#8](https://github.com/timonPark/flowmeet-web/issues/8) 로깅/모니터링 | 접근성 위반이 production 에서 많이 리포트되면 Sentry 분류 태그 고려 (추후). |
+| [#8](https://github.com/timonPark/flowmeet-web/issues/8) 로깅/모니터링 | 외부 벤더 미도입. 접근성 위반은 `@axe-core/playwright` E2E 로만 잡고, production 리포트 수집 레이어는 추후. |
 | [#9](https://github.com/timonPark/flowmeet-web/issues/9) 운영 규정 | PR 리뷰 체크에 "의미 토큰 사용·`dark:` 유틸 지양·`<html lang="ko">` 유지" 포함. |
 | [#13](https://github.com/timonPark/flowmeet-web/issues/13) `nextjs16-reality-check` | Tailwind 4 `@theme` 는 Tailwind 3 와 다른 경로 — 가드에 포함. Opus/Sonnet 가 `tailwind.config.ts` 로 색상 선언하려 들면 틀림. |
 | [#15](https://github.com/timonPark/flowmeet-web/issues/15) `app-router-layering` | `src/messages/`, `src/lib/i18n/`, `src/lib/ui/variants.ts`, `src/app/fonts/` 디렉터리 책임 포함. |
