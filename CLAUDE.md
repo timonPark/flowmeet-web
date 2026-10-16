@@ -114,6 +114,18 @@ npm run lint
 - 비-폼 상호작용 (토글·화자매칭 라벨 등) 은 RHF 쓰지 않음 → RQ mutation 직결 (#2).
 - 서버→폼 에러 매핑 함수는 `src/lib/validation/errors.ts` 한 곳에만. 폼 쪽에서 재구현 금지.
 
+## 에러 처리 (error-ux)
+
+> 상세: [`docs/axis-decisions/error-ux.md`](docs/axis-decisions/error-ux.md) (이슈 #5)
+
+- 경계: **하이브리드** — 루트 `global-error.tsx` + 섹션 그룹 `error.tsx` + 선별적 `<ErrorBoundary>` (`react-error-boundary` v4). "폴백이 더 유용한 지점" 에만 둔다.
+- `ApiError` / `ApiErrorCode` / `codeToMessage` 는 **`src/lib/errors/`** 에 집중. api 리포 `ErrorCode` 와 1:1 미러, union 밖은 `UNKNOWN`.
+- **중앙 메시지 테이블 1건** (`src/lib/errors/messages.ts`). 폼 쪽은 import 재사용, 중복 금지.
+- RQ 기본: `queries.throwOnError: true` (섹션 ErrorBoundary 로 bubbling), `mutations.onError: 전역 토스트`. 호출부가 override 가능.
+- 비-폼 Server Action 은 `ActionResult<T>` (ok discriminated union). 폼 `FormActionResult` 와 shape 통일. **throw 금지**.
+- 토스트는 `uiStore.toast.{error,success,...}` 추상 API. 중복 deduping은 `uiStore` 가 보장.
+- 로깅 훅: **`reportError(err, ctx)`** 추상. 지금은 `console.error`, #8 후 Sentry 로 **구현만 교체**.
+
 ## 참고 문서
 
 - TRD: `../outputs/TRD_조직지시_업무흐름관리플랫폼.md`
