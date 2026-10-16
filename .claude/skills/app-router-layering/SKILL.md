@@ -15,7 +15,9 @@ Next.js 16 App Router + React 19 환경에서 **디렉터리별 책임**, **레�
 
 ```
 src/
-├─ app/                    # ① Routes — Next 가 정한 파일 (page/layout/error/route/proxy 등)
+├─ proxy.ts                # Next 16 proxy (과거 middleware). 리포 루트 또는 src/ — src/app/ 안 아님
+├─ instrumentation.ts      # 서버 lifecycle 훅 — 리포 루트 또는 src/
+├─ app/                    # ① Routes — Next 가 정한 세그먼트 파일 (page/layout/error/route 등)
 │  ├─ (dashboard)/
 │  │  ├─ layout.tsx
 │  │  ├─ error.tsx
@@ -98,27 +100,20 @@ src/
 
 **단방향 그래프**. 역방향 import 는 PR 리뷰에서 반려.
 
-```
-┌─────────────────────────┐
-│  ① app/   (route edge)  │
-└─────────────┬───────────┘
-              ↓
-┌─────────────────────────┐
-│  ② features/<domain>/   │
-└─────────┬───────────┬───┘
-          ↓           ↓
-┌──────────────────┐ ┌─────────────────┐
-│ ③ components/    │ │ ④ lib/          │
-└────────┬─────────┘ └────────┬────────┘
-         └──────→ ④ lib/ ─────┘
-```
+### 허용 import
+
+| From | To (허용) |
+|---|---|
+| ① `app/` | `features/*`, `components/*`, `lib/*` 직접 가능 |
+| ② `features/<domain>/` | `components/*`, `lib/*` |
+| ③ `components/` | `lib/*` |
+| ④ `lib/<a>` | `lib/<b>` (순환 금지, 상위 레이어 금지) |
 
 ### 금지 패턴
 
-- **역방향**: `lib/` → `features/`, `components/` → `features/`, `features/<a>` → `features/<b>`.
-  - 두 피처가 공유하는 코드는 `components/` 또는 `lib/` 로 **올려야** 함.
-- **features 간 상호 의존**: `features/meeting` 과 `features/task` 가 서로 import 금지. 공유 지점을 `lib/` 또는 `components/` 로.
-- **app 을 다른 레이어가 import**: `app/` 은 "edge". 다른 레이어가 route 를 참조하지 않는다.
+- **역방향**: `lib/` → `features/`, `components/` → `features/`, `components/` → `app/`, `lib/` → `app/`.
+  - "다른 레이어가 `app/` 을 import" **엄격 금지** — `app/` 은 라우트 엣지.
+- **features 간 상호 의존**: `features/<a>` 가 `features/<b>` 를 import **금지** — 두 피처가 공유하는 요소가 생기면 **`components/` 또는 `lib/` 로 승격**. (예외를 열면 drift 가 즉시 생겨서 명시 예외 조항 없음. "공유되면 승격" 이 원칙.)
 - **순환 import** (`lib/a` ↔ `lib/b`): 공통 추출로 끊음.
 
 ### 측정·강제
@@ -132,7 +127,23 @@ src/
 ### 3.1. 기본값은 Server Component
 
 - `"use client"` 디렉티브가 **없으면 Server Component**. 이게 기본.
-- "use client" 는 **상태·이벤트·브라우저 API·훅이 필요한 트리의 꼭대기만**. 자식은 자동으로 클라이언트 번들.
+- "use client" 는 **상태·이벤트·브라우저 API·훅이 필요한 트리의 꼭대기만**.
+- **"use client" 의 효과**: 이 모듈이 **import 하는 하위 모듈** 은 클라이언트 번들에 포함. 그러나 **`children` 이나 다른 prop 으로 전달된 Server Component 는 서버에서 랜더링된 결과를 받음** — Client 가 "래퍼" 역할만 한다면 하위 서버 콘텐츠는 유지. 모든 자식을 클라이언트로 끌어내려야 하는 것 아님.
+
+```tsx
+// src/app/dashboard/page.tsx (Server)
+import { ClientFilter } from '@/features/dashboard/ClientFilter';
+import { ServerSideSummary } from '@/features/dashboard/ServerSideSummary';
+
+export default async function Page() {
+  return (
+    <ClientFilter>              {/* client wrapper */}
+      <ServerSideSummary />      {/* 서버에서 랜더링된 결과를 children 으로 전달 */}
+    </ClientFilter>
+  );
+}
+```
+
 - 꼭대기 설정이 중요 — 아래에 있는 Server-side 로 가능한 로직을 괜히 클라이언트로 끌어내지 말 것.
 
 ### 3.2. 배치 원칙
@@ -184,7 +195,7 @@ page.tsx (Server)
 | `lib/api/browserClient.ts` | 클라 전용 — `AuthContext` memory token, 401 → Server Action refresh 위임 |
 | `features/<domain>/queries.ts` | RQ `queryFn` / query key 선언. 각 쿼리는 **반드시** `browserClient` 경유 |
 | `features/<domain>/actions.ts` | Server Actions. **반드시** `serverClient` 경유. 반환은 `FormActionResult`/`ActionResult` ([#5](../../../docs/axis-decisions/error-ux.md)) |
-| RSC fetch (서버 컴포넌트 안의 직접 `await`) | `serverClient` 경유. 캐시는 `'use cache'` + `cacheLife` + `cacheTag` 로 명시 opt-in |
+| RSC fetch (서버 컴포넌트 안의 직접 `await`) | `serverClient` 경유. 캐시는 `'use cache'` + `cacheLife` + `cacheTag` 로 명시 opt-in — **단, 아래 §4.3 인증 경계 주의** |
 
 ### 4.2. 금지 패턴
 
@@ -192,6 +203,32 @@ page.tsx (Server)
 - `lib/stores/*` 가 **직접 `fetch()` 호출** → store 안 네트워크 금지 ([#3](../../../docs/axis-decisions/state-management.md))
 - 한 함수에서 `serverClient` 와 `browserClient` 를 분기해 호출 → 호출 지점이 서버냐 클라냐에 따라 **파일 분리**
 - 서버 데이터를 `lib/stores/*` (Zustand) 에 저장 → RQ 가 가진 데이터는 Zustand 에 넣지 않는다 ([#3](../../../docs/axis-decisions/state-management.md))
+
+### 4.3. `'use cache'` 와 인증 경계 (매우 중요)
+
+- **`'use cache'` 함수 안에서 `cookies()` / `headers()` 를 직접 읽지 않는다** — 캐시가 사용자 간 공유되면 **다른 사용자의 응답을 받을 위험**.
+- 사용자별 데이터가 필요한 경우:
+  - **Option A (권장)**: 캐시 함수는 **공용 데이터만** 로드 (조직 공용 리스트 등). 사용자별 필터링·조회는 **캐시 밖**에서 수행.
+  - **Option B**: 캐시 함수를 **`userId` / `teamId` 를 명시 인수** 로 받고 `cacheTag('x:userId:${id}')` 로 격리. 호출자 (서버 컴포넌트) 가 `cookies()` 로 userId 를 얻어 전달.
+- **금지**:
+  ```ts
+  // ❌ 사용자 간 캐시 오염
+  async function getMyMeetings() {
+    'use cache';
+    cacheLife('minutes');
+    const token = (await cookies()).get('access_token');  // ← 캐시 안에서 cookies() 금지
+    return serverClient.get('/me/meetings', { token });
+  }
+
+  // ✅ userId 를 명시 인수로, 캐시 태그로 격리
+  async function getUserMeetings(userId: string) {
+    'use cache';
+    cacheLife('minutes');
+    cacheTag(`meetings:user:${userId}`);
+    return serverClient.get(`/users/${userId}/meetings`);
+  }
+  ```
+- 상세 패턴·예외는 [#2 data-fetching](../../../docs/axis-decisions/data-fetching.md) 참조 (추후 보강 예정).
 
 ---
 
@@ -222,13 +259,38 @@ export async function createMeetingAction(input: unknown): Promise<ActionResult<
 
 - **비즈니스 로직은 pure helper (`createMeetingLogic`) 로 추출** → Vitest 로 유닛 테스트 ([#6](../../../docs/axis-decisions/test-strategy.md)).
 - Server Action 함수는 **얇게** — schema 검증 + helper 호출 + 결과 매핑.
-- **throw 금지** — `ActionResult`/`FormActionResult` 로 반환. 예외: 세션 만료 `redirect('/login')`.
 
-### 5.3. 금지 패턴
+### 5.3. 예상 가능 오류 vs 예상 못한 예외
+
+Server Action 의 throw 정책은 **오류의 성격에 따라 다르다**:
+
+- **예상 가능한 도메인·검증 오류** (zod 실패, 중복 데이터, 권한 없음, 비즈니스 룰 위반 등) → **`ActionResult`/`FormActionResult` 로 반환**. UI 가 토스트·인라인 에러·필드 에러로 처리.
+- **세션 만료 (401)** → `redirect('/login')`. 반환 shape 이전에 처리.
+- **예상 못한 예외** (네트워크 장애·DB 다운·버그 등) → **`reportError` 로 로깅 후 throw** → Next 의 에러 바운더리 (`error.tsx` / `global-error.tsx`) 가 받음. **조용히 `ActionResult` 로 변환하면 관측이 누락**된다.
+
+```ts
+export async function createMeetingAction(input: unknown): Promise<ActionResult<{ id: string }>> {
+  const parsed = createMeetingSchema.safeParse(input);
+  if (!parsed.success) return mapZodErrorToActionResult(parsed.error);  // 예상 가능 → 반환
+
+  try {
+    return await createMeetingLogic(parsed.data, serverClient);
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 'MEETING_DUPLICATE') {
+      return { ok: false, code: 'MEETING_DUPLICATE', message: codeToMessage('MEETING_DUPLICATE') };  // 예상 가능 → 반환
+    }
+    reportError(err, { source: 'server-action:createMeeting' });  // 예상 못한 예외
+    throw err;  // 에러 바운더리로 bubble
+  }
+}
+```
+
+### 5.4. 금지 패턴
 
 - Server Action 안에서 직접 `fetch` → `serverClient` 경유
 - Server Action 이 거대한 비즈니스 로직 포함 → pure helper 로 분리
-- Server Action 이 throw → `ActionResult` 반환
+- **예상 가능 오류를 throw** 로 던지기 → `ActionResult` 반환
+- **예상 못한 예외를 조용히 `ActionResult` 로 변환** → 관측 누락, 바운더리 bypass. 로깅 후 throw 가 맞다.
 - Server Action 호출 결과를 Zustand 에 중복 저장 → RQ 가 담당
 
 ---
@@ -237,7 +299,20 @@ export async function createMeetingAction(input: unknown): Promise<ActionResult<
 
 ### 6.1. Route groups
 
-- `src/app/(dashboard)/` — 레이아웃·에러 바운더리 공유. URL 에는 안 나타남.
+- `src/app/(dashboard)/` — route group. URL path 에는 **안 나타남** (polling path 가 아니라 코드 구조화 수단).
+- 그룹 **자체** 가 자동으로 레이아웃/에러를 공유하는 건 아님. 그룹 폴더 안에 `layout.tsx` / `error.tsx` 를 두면 **그 폴더 하위 모든 라우트가 공유** 하는 것.
+- 예:
+  ```
+  src/app/
+  ├─ (dashboard)/
+  │  ├─ layout.tsx          ← dashboard/* 하위 공용 레이아웃
+  │  ├─ error.tsx           ← dashboard/* 하위 공용 에러 폴백
+  │  ├─ team/page.tsx       ← /team
+  │  └─ meeting/page.tsx    ← /meeting
+  └─ (auth)/
+     ├─ layout.tsx          ← auth/* 전용
+     └─ login/page.tsx      ← /login
+  ```
 - 섹션별 그룹: `(dashboard)`, `(meeting)`, `(auth)`, `(settings)` — 섹션 레이아웃 + `error.tsx` 선택적 배치.
 - 세부는 [#5 error-ux](../../../docs/axis-decisions/error-ux.md) §B.
 
@@ -285,7 +360,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
-- `QueryClient` 는 **매 요청 fresh 인스턴스** (`cacheComponents` 하에서 중요, 세션 간 유출 방지) ([#2](../../../docs/axis-decisions/data-fetching.md)).
+- `QueryClient` 수명은 **환경별로 다름**:
+  - **브라우저**: 앱 수명 동안 **안정적인 단일 인스턴스**. `providers.tsx` 모듈 수준에서 `useState(() => new QueryClient(...))` 로 생성 → 재마운트 시 재생성 안 되게. **매 랜더마다 새로 만들면 캐시가 무의미**해짐.
+  - **서버 prefetch (RSC)**: `cacheComponents` 하에서 서버 데이터 prefetch 시엔 **요청별로 격리된 임시 QueryClient** 를 만들어 `dehydrate` → `<HydrationBoundary state={dehydratedState}>` 로 클라에 전달. 서버 간 캐시 공유 방지.
 - `Zustand` 는 **Provider 없음** — slice 모듈이 싱글턴 ([#3](../../../docs/axis-decisions/state-management.md)).
 - `<html lang="ko">` 는 i18n·a11y 결정 ([#7](../../../docs/axis-decisions/a11y-i18n-tokens.md)).
 
