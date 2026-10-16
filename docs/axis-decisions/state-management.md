@@ -1,7 +1,7 @@
 ---
 title: 상태 관리 전략
 date: 2026-10-16
-author: m05214@idstrust.com
+author: kindcorder@gmail.com
 status: DECIDED
 issue: "#3"
 scope: flowmeet-web 클라이언트 상태의 범주별 담당 계층 결정 (서버/폼 상태 제외)
