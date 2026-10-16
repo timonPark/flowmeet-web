@@ -140,6 +140,31 @@ npm run lint
 - **RSC 유닛 테스트 금지** (프레임워크 한계) → E2E 로 커버. Server Action 은 pure helper 추출해 helper 를 유닛.
 - 커버리지 **하드 게이트 없음** — "변경 모듈에 테스트 있는가" PR 리뷰로 관리. CI workflow 는 #9 와 묶음.
 
+## 접근성 · i18n · 디자인 토큰
+
+> 상세: [`docs/axis-decisions/a11y-i18n-tokens.md`](docs/axis-decisions/a11y-i18n-tokens.md) (이슈 #7)
+
+### 접근성 (a11y)
+- `eslint-plugin-jsx-a11y/recommended` 유지.
+- 접근성 복잡 컴포넌트는 **Radix UI primitives** (Dialog/Dropdown/Popover/Tabs/Tooltip 등) 선택 도입. 토스트는 **Sonner**. 수제 Modal/Dropdown 금지.
+- Variants 관리: **CVA (`class-variance-authority`)** — Tailwind 클래스를 의미 variant 로 추상화.
+- 런타임 검사: **`@axe-core/playwright`** 를 E2E 각 스펙 `afterEach`. **critical/serious → fail**, moderate/minor → warning.
+- `focus-visible:` 유틸로 포커스 가시화 필수. 색만으로 상태 전달 금지. 아이콘 전용 버튼은 `aria-label` 필수.
+
+### i18n
+- **next-intl v3** 도입. 초기 로케일 **`ko` 1개**, 비-라우트 모드.
+- `<html lang="ko">` **(현재 `"en"` 교정 대상)**.
+- 메시지: `src/messages/ko.json`, 네임스페이스 분리 (`common`, `nav`, `auth`, `meeting`, `dashboard`, `recording`, `speakerMatch`, `errors`, `validation`).
+- 날짜/숫자 포맷은 `src/lib/i18n/format.ts` 공용 유틸만. 직접 `toLocaleString` 호출 지양.
+- #5 `errors/messages.ts` 와 #4 zod 메시지는 **점진 전환** — 함수 시그니처 유지, 내부에서 `useTranslations` 호출로 교체.
+
+### 디자인 토큰 & 테마
+- **Tailwind 4 `@theme` + CSS variables**. 색상은 **`oklch`** + **의미 토큰** (`bg` / `fg` / `primary` / `muted` / `border` / `danger` / `success` / `warning` + `-fg` variant). 9단계 scale 금지.
+- 다크모드: 토큰 구조만 지원 (`data-theme="dark"`). 토글 UI 는 추후.
+- **금지**: 임의 hex inline, `bg-red-500` 등 Tailwind 기본 색상 scale 직접 참조, `dark:` 유틸, `tailwind.config.ts` 색상 선언, 임의 spacing.
+- 폰트: **Pretendard** (`next/font/local` self-host) + `system-ui` 폴백.
+- 반응형 breakpoint 는 Tailwind 기본 유지.
+
 ## 참고 문서
 
 - TRD: `../outputs/TRD_조직지시_업무흐름관리플랫폼.md`
