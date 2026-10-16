@@ -34,6 +34,13 @@ gh pr create --fill
 - **CI (예정)**: GitHub Actions. PR 당 `lint` + `tsc --noEmit` + `npm test` + 조건부 Playwright E2E. 실패 시 머지 블로킹. 커버리지 하드 게이트 없음.
 - **PR 리뷰 체크리스트**: 별도 문서 없음 — **이 CLAUDE.md 의 각 섹션 (API 통신·상태 관리·폼·에러·테스트·a11y·로깅 등) 이 그대로 체크리스트**. PR 리뷰 시 scan.
 - **작업 로그**: `.claude/work_history/` 미도입. 결정은 `docs/axis-decisions/`, 변경 이유는 커밋/PR, 구조는 CLAUDE.md. 중복 소스 금지.
+- **투명성 원칙**: 작업 중 상태 보고에 `▶` (진행 중) / `✅` (완료) / `🚧` (블로커·대기) 를 **의도적으로 사용**. 사용자가 흐름을 끊지 않고도 어디까지 왔는지 알 수 있도록.
+
+## 하네스 스킬 (`.claude/skills/`)
+
+- Next.js 코드·설정·캐시·라우팅·Server Actions·RSC·Tailwind 테마를 쓰거나 리뷰하기 전에 **[`nextjs16-reality-check`](.claude/skills/nextjs16-reality-check/SKILL.md)** 로드 필수. Opus/Sonnet 학습 지식이 Next 15 전제라 틀어지는 지점을 catch.
+- 다른 스킬은 Phase 3 에서 순차 추가 — `ts-style` (#14) / `app-router-layering` (#15) / `error-ux` (#16) / `data-fetching-guard` (#17) / `web-testing` (#18) / `web-security` (#19) / 신규 축 묶음 (#20).
+- codex 외부 리뷰는 Phase 2 포팅 대상 — api 리포의 `codex-review-triage` 를 그대로 복제 (#9, #11).
 
 ## 기술 스택
 
