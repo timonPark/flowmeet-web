@@ -93,7 +93,7 @@ export type FormActionResult<T = unknown> =
 | 400 / 409 / 기타 비필드 | `{ formError, code }` | 폼 상단 inline + 선택적 토스트 (`uiStore`) |
 | 401 | - | Server Action 내 `redirect('/login')` |
 | 403 | - | 상위 가드가 처리 (라우트 가드 또는 토스트) |
-| 500+ | `{ formError: '잠시 후 다시 시도해 주세요.' }` + Sentry 전송 (#8) | 기본 메시지 표시, 상세는 로깅으로 |
+| 500+ | `{ formError: '잠시 후 다시 시도해 주세요.' }` + `reportError` (#8) | 기본 메시지 표시, 상세는 로깅으로 |
 
 **매핑 함수는 `src/lib/validation/errors.ts` 에 한 곳에만 둔다** — 각 폼에서 재구현 금지. 폼 측은 결과 shape 만 소비.
 
