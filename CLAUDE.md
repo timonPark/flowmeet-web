@@ -126,6 +126,20 @@ npm run lint
 - 토스트는 `uiStore.toast.{error,success,...}` 추상 API. 중복 deduping은 `uiStore` 가 보장.
 - 로깅 훅: **`reportError(err, ctx)`** 추상. 지금은 `console.error`, #8 후 Sentry 로 **구현만 교체**.
 
+## 테스트
+
+> 상세: [`docs/axis-decisions/test-strategy.md`](docs/axis-decisions/test-strategy.md) (이슈 #6)
+
+- 유닛/통합: **Vitest** + `@vitejs/plugin-react` + jsdom
+- 컴포넌트: **@testing-library/react** + **@testing-library/user-event** (`getByRole` 우선, `getByTestId` 는 최후수단)
+- 네트워크: **MSW v2** — handlers 는 유닛/E2E 공용 (`src/test/mocks/`). 함수-레벨 fetch mock 금지. `onUnhandledRequest: 'error'`.
+- E2E: **Playwright** + Next 16 `experimental/testmode` (서버 fetch 가로채기). 루트 `e2e/` 디렉터리. 초기 스모크 3-5개.
+- **코로케이션**: `foo.ts` + `foo.test.ts` 나란히.
+- 공용 래퍼: `src/test/renderWithProviders.tsx` (매 테스트 fresh `QueryClient`), `src/test/resetStores.ts` (`beforeEach` 격리).
+- **원칙**: 행동 테스트. 구현 세부·shallow·내부 state inspection 금지. 플레이크는 bug — 재시도로 숨기지 않음.
+- **RSC 유닛 테스트 금지** (프레임워크 한계) → E2E 로 커버. Server Action 은 pure helper 추출해 helper 를 유닛.
+- 커버리지 **하드 게이트 없음** — "변경 모듈에 테스트 있는가" PR 리뷰로 관리. CI workflow 는 #9 와 묶음.
+
 ## 참고 문서
 
 - TRD: `../outputs/TRD_조직지시_업무흐름관리플랫폼.md`
