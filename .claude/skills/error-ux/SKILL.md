@@ -35,11 +35,16 @@ src/lib/errors/
 
 ```tsx
 'use client';  // 필수 (Next 16)
+import { useEffect } from 'react';
 import { reportError } from '@/lib/errors/reportError';
 
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  // 렌더 본문에서 호출 금지 — React 재랜더/Strict Mode 로 중복 보고
+  useEffect(() => {
+    reportError(error, { source: 'global-error', extra: { digest: error.digest } });
+  }, [error]);
+
   // global-error 는 루트 레이아웃을 대체 — 자체 <html>/<body> 필수 (#13 §2.5)
-  reportError(error, { source: 'global-error', extra: { digest: error.digest } });
   return (
     <html lang="ko">
       <body>
@@ -56,27 +61,37 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
 **금지**:
 - `"use client"` 누락 → Next 가 거부
 - `<html>`/`<body>` 생략 → 루트 레이아웃이 사라져 깨짐
+- **렌더 본문에서 `reportError` 직접 호출** → 재랜더 중복 보고. `useEffect(..., [error])` 로 이동
 - `reportError` 호출 누락 → 관측 공백
 
 ### 2.2. 섹션 `src/app/(group)/error.tsx`
 
 ```tsx
 'use client';  // 필수
+import { useEffect } from 'react';
+import Link from 'next/link';
 import { reportError } from '@/lib/errors/reportError';
 
 export default function Error({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  reportError(error, { source: 'section-error:(dashboard)', extra: { digest: error.digest } });
+  useEffect(() => {
+    reportError(error, { source: 'section-error:(dashboard)', extra: { digest: error.digest } });
+  }, [error]);
+
   return (
     <div role="alert">
       <h2>이 섹션을 불러오지 못했습니다</h2>
-      <button onClick={() => reset()}>다시 시도</button>
+      <div>
+        <button onClick={() => reset()}>다시 시도</button>
+        <Link href="/">처음으로</Link>
+      </div>
     </div>
   );
 }
 ```
 
-- 섹션 폴백 UI 는 **재시도 버튼 + "처음으로"** 를 기본 제공 (#5).
+- 섹션 폴백 UI 는 **재시도 버튼 + "처음으로"** 를 기본 제공 (#5 결정). 둘 다 포함.
 - 섹션 안에서만 교체 — 상위 레이아웃·네비게이션은 유지.
+- `reportError` 는 **`useEffect` 안에서** (렌더 본문 호출 금지).
 
 ### 2.3. 컴포넌트 `ErrorBoundary` (선별적)
 
@@ -88,15 +103,15 @@ import { reportError } from './reportError';
 
 type Props = {
   children: React.ReactNode;
-  fallback: (props: FallbackProps) => React.ReactNode;
+  Fallback: React.ComponentType<FallbackProps>;  // 전체 FallbackProps 전달 (componentStack 유지)
   source: string;
 };
 
-export function ErrorBoundary({ children, fallback, source }: Props) {
+export function ErrorBoundary({ children, Fallback, source }: Props) {
   return (
     <ReactErrorBoundary
-      FallbackComponent={({ error, resetErrorBoundary }) => fallback({ error, resetErrorBoundary })}
-      onError={(error) => reportError(error, { source })}
+      FallbackComponent={Fallback}
+      onError={(error, info) => reportError(error, { source, extra: { componentStack: info.componentStack } })}
     >
       {children}
     </ReactErrorBoundary>
@@ -116,21 +131,34 @@ export function ErrorBoundary({ children, fallback, source }: Props) {
 ```ts
 // src/lib/api/_core.ts (예시)
 export async function parseResponse<T>(res: Response): Promise<T> {
-  if (res.ok) return res.json();
+  if (res.ok) {
+    if (res.status === 204) return undefined as T;  // No Content — body 없음
+    const text = await res.text();
+    if (!text) return undefined as T;
+    return JSON.parse(text) as T;
+  }
 
-  const body = await res.json().catch(() => ({}));
-  throw new ApiError({
-    code: body.code ?? 'UNKNOWN',
-    status: res.status,
-    message: body.message ?? '요청을 처리하지 못했습니다',
-    fieldErrors: body.fieldErrors,
-    cause: body,
-  });
+  // 오류 응답 바디 — JSON 이 아닐 수도 있음, 안전 파싱
+  let body: Record<string, unknown> = {};
+  try {
+    const text = await res.text();
+    if (text) body = JSON.parse(text);
+  } catch {
+    // non-JSON 응답은 그대로 UNKNOWN 처리
+  }
+
+  const code = typeof body.code === 'string' ? body.code : 'UNKNOWN';
+  const message = typeof body.message === 'string' ? body.message : '요청을 처리하지 못했습니다';
+  const fieldErrors = isFieldErrorsShape(body.fieldErrors) ? body.fieldErrors : undefined;
+
+  throw new ApiError({ code, status: res.status, message, fieldErrors, cause: body });
 }
 ```
 
-- `code` 가 서버에서 안 왔으면 `'UNKNOWN'`.
-- `message` 는 서버가 준 메시지 그대로 저장. **사용자에게 보여줄 때는 반드시 `codeToMessage(err.code)` 통과** — 서버 메시지가 영어거나 민감정보 섞여 있을 수 있음.
+- **`204 No Content` 처리 필수** — `res.json()` 직접 호출하면 실패.
+- 오류 바디가 **JSON 이 아니거나 `code`/`message` 가 문자열이 아닐 수** 있음. 런타임 가드 통과 후 `ApiError` 생성.
+- `code` 가 서버에서 안 왔거나 비정상이면 `'UNKNOWN'`.
+- `message` 는 서버 원문 저장. **사용자에게 보여줄 때는 반드시 `codeToMessage(err.code)` 통과** — 서버 메시지가 영어거나 민감정보 섞여 있을 수 있음.
 
 ---
 
@@ -266,6 +294,7 @@ const mutation = useMutation({
 
 ```ts
 'use server';
+import { isRedirectError } from 'next/dist/client/components/redirect';  // 또는 next 공개 API 로 대체 (버전 확인)
 import { createMeetingSchema } from '@/lib/validation/schemas/meeting';
 import { serverClient } from '@/lib/api/serverClient';
 import { createMeetingLogic } from './createMeetingLogic';  // pure helper (#6)
@@ -282,21 +311,36 @@ export async function createMeetingAction(input: unknown): Promise<FormActionRes
   if (!parsed.success) return mapZodErrorToFormResult(parsed.error);
 
   try {
-    // 2) pure helper 호출 (helper 가 ActionResult 로 반환하도록)
+    // 2) pure helper 호출. 세션 만료 (401) 는 serverClient 내부에서 `redirect('/login')` 호출.
+    //    redirect() 는 특수 예외를 던지므로 아래 catch 가 반드시 재throw 해야 함.
     return await createMeetingLogic(parsed.data, serverClient);
   } catch (err) {
-    // 3) 예상 가능한 도메인 오류 (예: 중복) → 반환
+    // 3) Next 의 redirect/notFound 특수 예외는 **반드시 재throw** — Next 가 처리해야 함
+    if (isRedirectError(err) || isNotFoundError(err)) {
+      throw err;
+    }
+    // 4) 예상 가능한 도메인 오류 (예: 중복, 권한 거부) → 반환
     if (err instanceof ApiError && isDomainErrorCode(err.code)) {
       return { ok: false, code: err.code, message: codeToMessage(err.code) };
     }
-    // 4) 예상 못한 예외 → 로깅 후 throw
+    // 5) 예상 못한 예외 → 로깅 후 throw
     reportError(err, { source: 'server-action:createMeeting' });
     throw err;
   }
 }
 ```
 
-### 7.3. 호출부 (클라)
+> **중요**: `redirect()` / `notFound()` 는 Next 가 내부적으로 **특수 예외** (`NEXT_REDIRECT`, `NEXT_NOT_FOUND`) 를 throw 하는 방식으로 동작한다. 일반 `catch` 가 이들을 잡아 `ActionResult` 로 변환하거나 `reportError` 로 로깅하면 **리다이렉트/404 처리가 실패**한다. 반드시 **먼저 검사해 재throw**. (`isRedirectError`/`isNotFoundError` 는 Next 공개 API 를 사용 — 버전별 import 경로는 `next/dist/*` 가 아닐 수 있으므로 설치본 확인.)
+
+### 7.3. 도메인 오류 판별 보수적으로
+
+- `err instanceof ApiError` 체크는 **같은 모듈 그래프 안에서 생성된 ApiError 만** 매칭. serverClient 가 다른 번들러 context 를 거치거나 wrap 하면 miss 가능.
+- 대안:
+  - `err && typeof err === 'object' && 'code' in err` 형태로 **duck-typing** 보강
+  - 또는 `err.name === 'ApiError'` 체크
+- 통합 테스트로 "serverClient 의 모든 오류가 ApiError 로 호출부에 도달하는지" 보장.
+
+### 7.4. 호출부 (클라)
 
 ```tsx
 // RHF 폼 제출 (#4)
@@ -326,13 +370,27 @@ const onSubmit = form.handleSubmit(async (values) => {
 
 > **주**: Server Action throw 가 자동으로 섹션 `error.tsx` 로 가지 않는 호출 경로 (클라 핸들러 등) 는 **호출부가 명시 catch** 하거나 **react-error-boundary** 로 감싸야 한다 (#5 §F-주). 통합 테스트로 확인.
 
-### 7.4. 금지 패턴
+### 7.5. 금지 패턴
 
 - **모든 예외를 `ActionResult` 로 변환** → 관측 공백, 에러 바운더리 bypass
+- **`redirect()`/`notFound()` 특수 예외를 `catch` 가 삼킴** → 리다이렉트/404 실패. 반드시 재throw.
 - 예상 가능 오류를 throw → UX 거침, 사용자가 "오류가 발생했습니다" 만 보게 됨
 - `reportError` 호출 없이 throw → 관측 공백
 - Server Action 안에서 직접 `fetch` → `serverClient` 경유 (#2)
 - Server Action 이 거대한 비즈니스 로직 → pure helper 분리 (#6)
+
+### 7.6. 중복 로깅 방지 — 레이어별 책임
+
+하나의 장애가 Server Action + 클라 호출부 + ErrorBoundary 세 곳에서 각각 `reportError` 호출될 수 있다. **최종 관측 지점을 하나로** 정한다.
+
+| 발생 | 1차 로깅 책임 | 재로깅 금지 |
+|---|---|---|
+| Server Action 안의 예상 못한 예외 | Server Action (`source: 'server-action:xxx'`) | 호출부 catch, ErrorBoundary 는 **같은 에러면 중복 금지** |
+| 클라 호출부가 자체 발생시킨 에러 (RHF 등) | 호출부 (`source: 'form-submit:xxx'`) | - |
+| ErrorBoundary 가 받은 렌더 에러 | ErrorBoundary (`source: 'error-boundary:xxx'`) | - |
+
+- **룰**: 로깅은 **에러가 발생한 레이어** 에서 1회만. 상위 레이어가 받으면 **UX 처리만** (토스트 등). 재로깅 금지.
+- 호출부 catch 가 반드시 로깅해야 할 경우 (예: Server Action 이 로깅 안 했을 가능성) 라면 `source` 를 **`<layer>:catch` 로 접미** 해 중복인지 구분 가능하게.
 
 ---
 
@@ -360,17 +418,20 @@ reportError(err, { source: '<layer>:<subject>', extra: { ... }, userId: '...' })
 
 ## 9. 체크리스트 — 에러 처리 코드 작성·리뷰 시
 
-- [ ] `global-error.tsx` 가 `"use client"` + 자체 `<html>`/`<body>` + `reportError` 호출을 포함하는가?
-- [ ] 섹션 `error.tsx` 가 `"use client"` + `reportError` 호출을 포함하는가?
-- [ ] `ErrorBoundary` 가 "일부 터져도 나머지 살아야" 하는 지점에만 쓰이는가 (남용 금지)?
+- [ ] `global-error.tsx` 가 `"use client"` + 자체 `<html>`/`<body>` + **`useEffect` 안의** `reportError` 호출을 포함하는가?
+- [ ] 섹션 `error.tsx` 가 `"use client"` + **`useEffect` 안의** `reportError` + **재시도 + "처음으로"** 둘 다 포함하는가?
+- [ ] `ErrorBoundary` 가 "일부 터져도 나머지 살아야" 하는 지점에만 쓰이는가 (남용 금지)? Fallback 이 `componentStack` 받을 수 있는 구조인가?
 - [ ] `ApiError` 를 던질 때 `code`·`status`·`message`·`fieldErrors?` 가 올바르게 채워지는가?
+- [ ] `parseResponse` 가 `204 No Content` + 비-JSON 오류 바디를 안전하게 처리하는가?
 - [ ] 사용자 메시지는 **`codeToMessage` 통과** 인가? `err.message` 를 UI 에 그대로 노출하지 않는가?
 - [ ] 토스트 메시지가 하드코딩이 아니라 `codeToMessage` 통과인가?
 - [ ] RQ `defaultOptions.queries.throwOnError: true` + `mutations.onError` 전역 토스트가 설정됐는가?
 - [ ] 특정 쿼리가 inline 처리면 명시적 `throwOnError: false` 로 opt-out 했는가?
 - [ ] Server Action 이 **예상 가능 오류** 는 `ActionResult` 반환, **예상 못한 예외** 는 `reportError` + throw 하는가?
+- [ ] Server Action 의 `catch` 가 **`redirect()`/`notFound()` 특수 예외를 먼저 재throw** 하는가?
 - [ ] Server Action 호출부 (특히 클라 핸들러) 가 throw 경로를 명시 처리하거나 ErrorBoundary 로 감싸는가?
 - [ ] `reportError` 의 `source` 가 `<layer>:<subject>` 형식인가? `extra` 에 민감정보가 없는가?
+- [ ] **중복 로깅 금지** — 상위 레이어가 catch 하면 **UX 처리만**, `reportError` 는 1차 레이어에서 1회?
 - [ ] 폼 에러 매핑이 `codeToMessage` 를 import 재사용 (중복 테이블 없음)?
 
 ---
