@@ -1,7 +1,7 @@
 ---
 title: 데이터 페칭/캐시 전략
 date: 2026-10-16
-author: m05214@idstrust.com
+author: kindcorder@gmail.com
 status: DECIDED
 issue: "#2"
 scope: flowmeet-web 서버/클라이언트 데이터 로딩·캐싱·뮤테이션 기본 패턴
