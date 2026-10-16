@@ -39,9 +39,65 @@ flowmeet-web은 Next.js 16.4 (`cacheComponents: true` + `partialPrefetching: tru
   - **회의실 캘린더 뷰** (TRD §4.2 — 일/주간) → `'use cache'` + `cacheLife('minutes')` + `cacheTag('calendar:{roomId}:{yyyy-ww}')`
   - **마스터 데이터** (팀 목록, 회의실 목록 등) → `'use cache'` + `cacheLife('hours')`
 - 캐시 미적용 (dynamic 유지):
-  - **사용자별 리스트** (내 회의, 내 지시) — 세션 쿠키 기반, 캐시 공유 위험
+  - **사용자별 리스트** (내 회의, 내 지시) — 세션 쿠키 기반, 캐시 공유 위험 (아래 **인증 경계 규칙** 참조)
   - **회의 상세·녹음·화자매칭 등 상호작용 리소스** — 변화 빈도 높음, 아래 B3 에서 클라 캐시로 처리
 - 무효화: 쓰기 Server Action 또는 Route Handler 후 `revalidateTag(...)` / `updateTag(...)` 호출.
+
+#### A1-보강: `'use cache'` + 인증 경계 (사용자 간 캐시 오염 방지)
+
+> 2026-10-16 #15 리뷰 보강. 초기 결정에서 "사용자별은 캐시 미적용" 수준으로만 썼으나 — **캐시된 함수 안에서 `cookies()`/`headers()` 를 직접 읽으면 사용자 A 의 결과를 B 가 받을 수 있다**. 이 함정을 명시 금지한다.
+
+- **`'use cache'` 함수 안에서 `cookies()` / `headers()` 접근 금지** — 캐시 키가 요청별 인증 상태를 반영하지 않아 사용자 간 응답 오염 발생.
+- 사용자별 데이터를 캐시로 다뤄야 할 때 두 패턴 중 하나:
+
+  **(A) 캐시 밖에서 인증·개인화** (권장): 캐시 함수는 **공용 데이터** 만. 사용자별 필터링·조회는 캐시 호출 뒤에서.
+  ```ts
+  async function getPublicDashboardTemplate(teamId: string) {
+    'use cache';
+    cacheLife('hours');
+    cacheTag(`dashboard:template:${teamId}`);
+    return serverClient.get(`/teams/${teamId}/dashboard-template`);
+  }
+
+  async function getMyDashboard() {
+    const userId = await getUserIdFromCookies();   // 캐시 밖에서 세션 조회
+    const template = await getPublicDashboardTemplate(getTeamId(userId));
+    return personalize(template, userId);          // 개인화는 캐시 밖
+  }
+  ```
+
+  **(B) 사용자 식별자를 명시 인수로** — 명시적 캐시 태그로 격리:
+  ```ts
+  async function getUserMeetings(userId: string) {
+    'use cache';
+    cacheLife('minutes');
+    cacheTag(`meetings:user:${userId}`);
+    return serverClient.get(`/users/${userId}/meetings`);
+  }
+
+  // 호출자(RSC)가 cookies() 로 userId 얻어 전달
+  export default async function Page() {
+    const userId = await getUserIdFromCookies();
+    const meetings = await getUserMeetings(userId);
+    // ...
+  }
+  ```
+
+- **금지 예 (사고 패턴)**:
+  ```ts
+  // ❌ 캐시 안에서 cookies() — 사용자 간 응답 공유
+  async function getMyMeetings() {
+    'use cache';
+    cacheLife('minutes');
+    const token = (await cookies()).get('access_token');
+    return serverClient.get('/me/meetings', { token });
+  }
+  ```
+
+- **PR 리뷰 체크** (`data-fetching-guard` 스킬 입력):
+  - `'use cache'` 함수 안에서 `cookies()`/`headers()`/`draftMode()` import 또는 호출 금지
+  - 사용자별 캐시는 **`userId` 인수 + `cacheTag('<domain>:user:${id}')`** 패턴만 허용
+  - `serverClient` 가 `'use cache'` 안에서 호출될 때, 그 요청에 사용자 토큰이 들어가는지 명시 (들어가면 캐시 금지)
 
 ### B3. 클라이언트 캐시 — React Query v5
 
