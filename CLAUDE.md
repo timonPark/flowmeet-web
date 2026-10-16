@@ -103,6 +103,17 @@ npm run lint
 - Store 안에서 직접 `fetch` 호출 금지. 서버 통신은 RQ `queryFn`·Server Action 경유.
 - 녹음 chunk 등 바이너리 영속화는 Zustand `persist` 가 아닌 전용 IndexedDB 레이어로 분리. Zustand 는 메타데이터만.
 
+## 폼 / 검증
+
+> 상세: [`docs/axis-decisions/form-validation.md`](docs/axis-decisions/form-validation.md) (이슈 #4)
+
+- 폼 라이브러리: **react-hook-form v7** + **@hookform/resolvers/zod**.
+- 스키마: **zod**. `src/lib/validation/schemas/<domain>.ts` 에 한 번만 선언 → RHF resolver (클라) 와 Server Action 입력 파싱 (서버) **양쪽 공용**.
+- Server Action 은 throw 하지 않고 `FormActionResult<T>` (`ok` discriminated union) 를 반환. `fieldErrors` 는 RHF `setError`, `formError` 는 폼 상단/토스트.
+- 서버가 **진실의 근원**. 클라 선검증은 UX 목적만, 서버 결과로 덮어쓴다. Server Action 상단에서 `schema.safeParse` 재검증 필수.
+- 비-폼 상호작용 (토글·화자매칭 라벨 등) 은 RHF 쓰지 않음 → RQ mutation 직결 (#2).
+- 서버→폼 에러 매핑 함수는 `src/lib/validation/errors.ts` 한 곳에만. 폼 쪽에서 재구현 금지.
+
 ## 참고 문서
 
 - TRD: `../outputs/TRD_조직지시_업무흐름관리플랫폼.md`
