@@ -15,6 +15,61 @@ description: flowmeet-web 국제화 가드 — next-intl v3, ko 로케일, 메�
 - 설치: `npm install next-intl`.
 - 비-라우트 모드 (초기 로케일 1개라 `/[locale]/...` 미사용).
 
+### 1.1. 필수 설정 (3개 파일)
+
+**단순 설치 + Provider 만으론 동작 안 함** — Next.js plugin + request config 필요.
+
+**(1) `next.config.ts` 에 plugin 적용**:
+```ts
+import type { NextConfig } from 'next';
+import createNextIntlPlugin from 'next-intl/plugin';
+
+const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts');
+
+const nextConfig: NextConfig = {
+  cacheComponents: true,
+  partialPrefetching: true,
+  // ... 기존 설정
+};
+
+export default withNextIntl(nextConfig);
+```
+
+**(2) `src/i18n/request.ts` — request config**:
+```ts
+import { getRequestConfig } from 'next-intl/server';
+
+export default getRequestConfig(async () => {
+  const locale = 'ko';  // 단일 로케일 (추후 cookie/header 기반 분기)
+  return {
+    locale,
+    messages: (await import(`../messages/${locale}.json`)).default,
+  };
+});
+```
+
+**(3) `src/app/layout.tsx` — Provider**:
+```tsx
+import { NextIntlClientProvider } from 'next-intl';
+import { getLocale, getMessages } from 'next-intl/server';
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const locale = await getLocale();
+  const messages = await getMessages();
+  return (
+    <html lang={locale}>
+      <body>
+        <NextIntlClientProvider messages={messages}>
+          {children}
+        </NextIntlClientProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+이 3 파일 중 **하나라도 빠지면** `getTranslations` / `useTranslations` 가 런타임에 실패.
+
 ---
 
 ## 2. `<html lang="ko">` — 버그 교정 필수
@@ -182,34 +237,36 @@ export function formatRelativeTime(date: Date | string): string {
 
 ---
 
-## 6. #5 에러 메시지 점진 전환
+## 6. #5 에러 메시지 점진 전환 — 서버/클라이언트 API 분리
 
-[#5 error-ux](../../../docs/axis-decisions/error-ux.md) 의 `src/lib/errors/messages.ts` 는 지금 하드코딩. **다국어 적용 시 함수 시그니처 유지, 내부만 교체**:
+[#5 error-ux](../../../docs/axis-decisions/error-ux.md) 의 `src/lib/errors/messages.ts` 는 지금 하드코딩. 다국어 적용 시 **두 가지 API 로 분리** (hook 은 Server Action/일반 모듈에서 못 쓰므로):
 
 ```ts
-// 지금 (하드코딩)
-export function codeToMessage(code: string, fallback = MESSAGES.UNKNOWN): string {
-  return MESSAGES[toApiErrorCode(code)] ?? fallback;
+// src/lib/errors/messages.ts (next-intl 적용 후)
+import { getTranslations } from 'next-intl/server';
+import { useTranslations } from 'next-intl';
+import { toApiErrorCode } from './codes';
+
+// 서버용 (Server Component, Server Action, Route Handler, 일반 서버 함수)
+export async function codeToMessageServer(code: string, fallback?: string): Promise<string> {
+  const t = await getTranslations('errors');
+  const key = toApiErrorCode(code);
+  try { return t(key); } catch { return fallback ?? t('UNKNOWN'); }
 }
 
-// next-intl 적용 후 (내부만 교체)
-import { useTranslations } from 'next-intl';
-
+// 클라이언트 hook (Client Component 안)
 export function useCodeToMessage() {
   const t = useTranslations('errors');
   return (code: string, fallback?: string) => {
     const key = toApiErrorCode(code);
-    try {
-      return t(key);
-    } catch {
-      return fallback ?? t('UNKNOWN');
-    }
+    try { return t(key); } catch { return fallback ?? t('UNKNOWN'); }
   };
 }
 ```
 
-- 서버에서는 `getTranslations('errors')` 로 동일 처리.
-- **호출부 변경 없음** — `codeToMessage(err.code)` 는 그대로.
+- **호출 환경에 따라 다른 API** — 서버에선 `await codeToMessageServer(code)`, 클라에선 `const toMsg = useCodeToMessage(); toMsg(code)`.
+- 기존 동기 `codeToMessage(code)` 는 **삭제** — 어차피 서버에선 async, 클라에선 hook 필요하므로 한 함수로 안 됨.
+- 호출부 (fetch wrapper·에러 바운더리·토스트) 는 전환 시점에 환경별로 수정 필요. 변경 범위를 PR 체크리스트로 관리.
 - 전환 시점: 다국어 요구 생길 때 또는 i18n infrastructure 구축 완료 시.
 
 ---
@@ -218,31 +275,50 @@ export function useCodeToMessage() {
 
 zod 에러 메시지는 **스키마 선언 시점에 하드코딩** 되기 쉬움. 다국어 원할 때:
 
-### 7.1. 전역 errorMap
+### 7.1. 스키마 생성 시 번역 함수 주입 (전역 setErrorMap 금지)
+
+**`z.setErrorMap`** 는 **전역 변경** → 동시 여러 요청이 서로 다른 로케일을 쓰면 **메시지 섞임 위험**. 전역 설정 금지.
+
+대신 **스키마를 함수로 만들어 번역 함수를 인수로 주입**:
 
 ```ts
-// src/lib/validation/zodErrorMap.ts
+// src/lib/validation/schemas/meeting.ts
 import { z } from 'zod';
-import { useTranslations } from 'next-intl';
+import type { useTranslations } from 'next-intl';
 
-export function createZodErrorMap(t: ReturnType<typeof useTranslations<'validation'>>): z.ZodErrorMap {
-  return (issue, ctx) => {
-    switch (issue.code) {
-      case 'invalid_type': return { message: t('required') };
-      case 'too_small': return { message: t('minLength', { min: issue.minimum as number }) };
-      // ...
-    }
-    return { message: ctx.defaultError };
-  };
+type T = ReturnType<typeof useTranslations<'validation.meeting'>>;
+
+export function makeCreateMeetingSchema(t: T) {
+  return z.object({
+    title: z.string().min(1, { message: t('titleRequired') }),
+    startAt: z.string().datetime({ message: t('invalidDate') }),
+  });
 }
 
-// 사용
-const t = useTranslations('validation');
-z.setErrorMap(createZodErrorMap(t));
+export type CreateMeetingInput = z.infer<ReturnType<typeof makeCreateMeetingSchema>>;
 ```
 
-- 전역 `z.setErrorMap` 는 **client/server 각 context 안에서** 설정 (hook 사용 context 필요).
-- 스키마별 커스텀 메시지는 `.min(1, { message: t('fieldSpecific') })` 로.
+```tsx
+// 사용 (Client Component)
+const t = useTranslations('validation.meeting');
+const schema = makeCreateMeetingSchema(t);
+const form = useForm({ resolver: zodResolver(schema) });
+```
+
+```ts
+// 사용 (Server Action)
+import { getTranslations } from 'next-intl/server';
+
+export async function createMeetingAction(input: unknown) {
+  const t = await getTranslations('validation.meeting');
+  const schema = makeCreateMeetingSchema(t);
+  const parsed = schema.safeParse(input);
+  // ...
+}
+```
+
+- **요청별 격리 보장** — 각 request 가 자체 schema 인스턴스.
+- 공통 메시지 (`required`, `email`, `minLength`) 는 z 기본 코드 매핑 utility 로 (스키마마다 반복 안 되도록 helper 분리).
 
 ### 7.2. 지금은 하드코딩 inline — 이관 준비만
 
@@ -266,28 +342,12 @@ export function makeCreateMeetingSchema(t: ReturnType<typeof useTranslations>) {
 
 ## 8. SSR / Hydration
 
-- next-intl v3 는 **서버에서 메시지 pre-load → 클라에 전달** 하는 provider 자동 처리.
-- `src/app/providers.tsx` 또는 layout 에서 `NextIntlClientProvider` 설정:
-
-```tsx
-import { NextIntlClientProvider } from 'next-intl';
-import { getMessages } from 'next-intl/server';
-
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const messages = await getMessages();
-  return (
-    <html lang="ko">
-      <body>
-        <NextIntlClientProvider messages={messages}>
-          {children}
-        </NextIntlClientProvider>
-      </body>
-    </html>
-  );
-}
-```
-
-- 로케일 1개라 messages 가 자동 로드. 다국어 추가 시 `next-intl` 설정 (`i18n.ts` config) 추가 필요.
+- next-intl v3 는 **서버에서 messages pre-load** 후 `NextIntlClientProvider` 로 클라에 전달.
+- 실제 설정은 **§1.1 의 3개 파일** (`next.config.ts` + `src/i18n/request.ts` + `src/app/layout.tsx`) 로 완성. 자동이 아님 — 수동 구성 필요.
+- 로케일 1개라 request config 는 단순. 다국어 추가 시:
+  - `request.ts` 가 cookie/header 에서 로케일 결정
+  - `src/app/[locale]/...` 라우트 구조 전환 (또는 cookie 기반 유지)
+  - `getLocale()` 가 요청별 다른 값 반환
 
 ---
 

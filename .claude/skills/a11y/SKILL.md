@@ -22,7 +22,8 @@ description: flowmeet-web 접근성 가드 — jsx-a11y lint, Radix UI primitive
 
 | 컴포넌트 | Radix 패키지 | 이유 |
 |---|---|---|
-| Dialog, AlertDialog | `@radix-ui/react-dialog` | 포커스 트랩·focus restoration·`aria-modal`·`esc` 처리 자동 |
+| Dialog | `@radix-ui/react-dialog` | 포커스 트랩·focus restoration·`aria-modal`·`esc` 처리 자동 |
+| AlertDialog | `@radix-ui/react-alert-dialog` | **별도 패키지**. 파괴 작업 확인 다이얼로그 |
 | Dropdown Menu | `@radix-ui/react-dropdown-menu` | 키보드 네비·`role="menu"`·`aria-expanded` |
 | Popover | `@radix-ui/react-popover` | 포커스 관리·`aria-haspopup` |
 | Tabs | `@radix-ui/react-tabs` | `role="tablist"`·`role="tabpanel"`·화살표 키 |
@@ -36,35 +37,14 @@ description: flowmeet-web 접근성 가드 — jsx-a11y lint, Radix UI primitive
 
 ---
 
-## 3. CVA (`class-variance-authority`)
+## 3. CVA variants — **단일 소유자는 `design-tokens`**
 
-```ts
-// src/lib/ui/variants.ts
-import { cva } from 'class-variance-authority';
-
-export const buttonVariants = cva(
-  'inline-flex items-center justify-center rounded-md font-medium transition focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none',
-  {
-    variants: {
-      variant: {
-        primary: 'bg-primary text-primary-fg hover:opacity-90',
-        secondary: 'bg-muted text-fg hover:bg-border',
-        danger: 'bg-danger text-danger-fg hover:opacity-90',
-        ghost: 'bg-transparent hover:bg-muted',
-      },
-      size: {
-        sm: 'h-8 px-3 text-sm',
-        md: 'h-10 px-4',
-        lg: 'h-12 px-6 text-lg',
-      },
-    },
-    defaultVariants: { variant: 'primary', size: 'md' },
-  }
-);
-```
-
-- Tailwind 클래스를 **의미 variant 로 추상화** → 호출부가 유틸 조립하지 않도록.
-- **포커스 가시화는 모든 variant 의 base** 에 `focus-visible:ring-2 ring-primary ring-offset-2` 포함.
+- Button / Badge / Input 등 공용 variant 정의는 **`src/lib/ui/variants.ts`** 한 곳. 소유 스킬은 [`design-tokens`](../design-tokens/SKILL.md) §2.2.
+- `a11y` 스킬은 **a11y 관점 요구만 명시**:
+  - 모든 variant 의 base 에 **`focus-visible:ring-2 ring-primary ring-offset-2`** 포함 (포커스 가시화)
+  - `disabled:opacity-50 disabled:pointer-events-none` (비활성 접근성)
+  - interactive 요소에 `cursor-pointer` 는 피함 (버튼은 기본 pointer, 필요 시 shape 로 전달)
+- a11y 스킬이 variant 코드를 **중복 선언 금지** — drift 방지.
 
 ---
 
@@ -98,7 +78,7 @@ export function TextField<T extends FieldValues>({ label, description, type = 't
         type={type}
         aria-invalid={!!fieldState.error}
         aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
-        aria-required={!!(control.rules as any)?.required}
+        aria-required={control.rules?.required !== undefined}
       />
       {fieldState.error && <p id={errorId} role="alert">{fieldState.error.message}</p>}
     </div>

@@ -17,16 +17,20 @@ flowmeet-web 은 Next 16 `cacheComponents: true` + `partialPrefetching: true` �
 
 ## 1. 번들 사이즈 예산
 
-### 1.1. 라우트별 First Load JS 목표
+### 1.1. 라우트별 First Load JS 목표 (가이드, 하드 게이트 아님)
 
-| 라우트 성격 | 1st Load JS 목표 (gzip) | 측정 |
+**측정 기준**: Next.js `npm run build` 출력의 "First Load JS" 는 **일반적으로 gzip 전 크기** (compressed size 가 아니라 bundled JS 크기 기준). gzip 측정은 별도 (예: `gzip -c <file> | wc -c` 또는 `@next/bundle-analyzer`).
+
+| 라우트 성격 | First Load JS 목표 (gzip 전, Next build 출력) | gzip 환산 (추정 30-35%) |
 |---|---|---|
-| 공개 (로그인 등) | **≤ 100 KB** | `npm run build` 출력 |
-| 인증 월드 (대시보드 등) | **≤ 200 KB** | 동일 |
-| 녹음·화자매칭 (상호작용 집약) | **≤ 300 KB** | 녹음 라이브러리 + MediaRecorder wrapper |
+| 공개 (로그인 등) | **≤ 300 KB** | ~100 KB |
+| 인증 월드 (대시보드 등) | **≤ 500 KB** | ~170 KB |
+| 녹음·화자매칭 (상호작용 집약) | **≤ 800 KB** | ~280 KB |
 
-- 예산 초과 시 PR 리뷰에서 **원인 지적 + 분할·대체** 요구.
-- 하드 게이트 아님 — 상황 설명이 합리적이면 통과.
+**중요 — 숫자는 baseline 생기면 재조정**:
+- 위 목표는 **초기 가이드**. 실제 피처가 쌓이면 **baseline (최초 안정 버전)** 을 기준으로 **회귀 폭 ≤ 20%** 를 더 중요한 기준으로.
+- **측정 환경 명시 필요**: 모바일 CPU slowdown 4x, Fast 3G, Lighthouse 등. 로컬 Chrome DevTools 결과만으론 production 체감 못 함.
+- 하드 게이트 아님 — PR 리뷰에서 사유 설명 가능하면 통과.
 
 ### 1.2. 전역 shared chunk
 
@@ -102,20 +106,36 @@ PR 에 신규 디펜던시 추가 시:
 
 ## 4. 코드 분할 (`next/dynamic`)
 
-```ts
+**중요**: `next/dynamic({ ssr: false })` 는 **Client Component 안에서만** 호출 가능. Server Component 에서 호출하면 런타임 에러.
+
+```tsx
+// src/features/recording/RecordingSessionLoader.tsx
+'use client';  // 필수 — dynamic({ ssr: false }) 쓰려면
 import dynamic from 'next/dynamic';
 
-// 큰 컴포넌트를 lazy load — 초기 번들에 포함 안 됨
-const RecordingSession = dynamic(() => import('@/features/recording/RecordingSession'), {
+const RecordingSession = dynamic(() => import('./RecordingSession'), {
   loading: () => <div>준비 중...</div>,
-  ssr: false,  // MediaRecorder 등 브라우저 API 전용이면 ssr: false
+  ssr: false,  // MediaRecorder 등 브라우저 API 전용
 });
+
+export default RecordingSession;
 ```
 
+```tsx
+// 호출 (Server Component 또는 Client Component)
+import RecordingSessionLoader from '@/features/recording/RecordingSessionLoader';
+
+export default function Page() {
+  return <RecordingSessionLoader />;
+}
+```
+
+- Server Component 에서 바로 `dynamic({ ssr: false })` 호출 **금지** → `"use client"` 모듈로 wrap.
+- `ssr: true` (기본) 는 어디서나 가능.
 - 적용 대상:
-  - MediaRecorder·IndexedDB 로직 (녹음)
-  - 차트 라이브러리 (대시보드)
-  - Rich text editor (지시 작성, 생기면)
+  - MediaRecorder·IndexedDB 로직 (녹음) — `ssr: false`
+  - 차트 라이브러리 (대시보드) — 서버 렌더 가능하면 `ssr: true`
+  - Rich text editor (지시 작성, 생기면) — `ssr: false`
 - 무조건 적용 아님 — **번들 실측 후 큰 chunk 만**.
 
 ---

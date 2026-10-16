@@ -47,8 +47,8 @@ description: flowmeet-web 디자인 토큰 가드 — Tailwind 4 `@theme` + CSS 
   --z-toast: 100;
   --z-tooltip: 110;
 
-  /* 폰트 */
-  --font-sans: 'Pretendard', system-ui, -apple-system, sans-serif;
+  /* 폰트 — next/font/local 이 주입하는 CSS variable 을 참조 */
+  --font-sans: var(--font-pretendard), system-ui, -apple-system, sans-serif;
 }
 
 /* 다크모드 — 토큰 구조만. 토글 UI 는 추후. */
@@ -62,8 +62,12 @@ description: flowmeet-web 디자인 토큰 가드 — Tailwind 4 `@theme` + CSS 
   --color-primary-fg: oklch(0.1 0 0);
   --color-danger: oklch(0.65 0.22 25);
   --color-danger-fg: oklch(0.1 0 0);
-  /* success/warning 등도 유사 패턴 */
+  --color-success: oklch(0.65 0.18 150);
+  --color-warning: oklch(0.8 0.17 85);
+  /* 모든 의미 토큰이 light/dark 양쪽에 선언돼야 함 — "유사 패턴" 생략 금지 */
 }
+
+/* light/dark 모든 조합의 WCAG AA (4.5:1) 대비를 실측 검증. 자동 아님 — 토큰 추가 시 수동 확인. */
 ```
 
 ### 1.1. 왜 oklch?
@@ -92,7 +96,10 @@ description: flowmeet-web 디자인 토큰 가드 — Tailwind 4 `@theme` + CSS 
 - `bg-primary` → `background-color: var(--color-primary)` 자동.
 - Tailwind 4 가 `@theme` 선언을 자동 utility 로 변환.
 
-### 2.2. CVA variants (의미 추상화)
+### 2.2. CVA variants (의미 추상화) — **단일 소유자**
+
+> **`src/lib/ui/variants.ts` 가 유일 선언 위치**. [`a11y`](../a11y/SKILL.md) 스킬은 a11y 관점 요구만 명시하고 **variant 코드는 중복 선언 금지**. drift 방지.
+
 
 ```ts
 // src/lib/ui/variants.ts (a11y 스킬 §3 중복)
@@ -148,16 +155,17 @@ import { pretendard } from './fonts/pretendard';
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ko" className={pretendard.variable}>
-      <body style={{ fontFamily: 'var(--font-pretendard), system-ui, sans-serif' }}>
-        {children}
-      </body>
+      <body>{children}</body>  {/* Tailwind font-sans 가 --font-pretendard 를 참조 (§1 @theme 선언) */}
     </html>
   );
 }
 ```
 
-- `next/font/local` 가 build time 최적화 (subset, preload).
-- CDN 의존 제거 → FOUC 방지, 성능 유리.
+- `pretendard.variable` 이 `<html>` 에 `--font-pretendard` CSS 변수 주입.
+- §1 의 `@theme { --font-sans: var(--font-pretendard), ... }` 가 Tailwind `font-sans` 유틸을 이 변수로 연결.
+- 결과: `<div className="font-sans">` 가 자동으로 Pretendard 적용.
+- **body 에 inline style 금지** — 토큰 경로가 분산되어 drift.
+- `next/font/local` 이 preload·subset·self-host 처리. **다만 subset 자동 생성은 폰트 파일에 포함된 글리프 기준** — Pretendard 는 이미 KR subset 제공되므로 **적절한 파일 (예: `Pretendard-SubsetKR-*.woff2`) 을 다운로드해 사용** 권장.
 - 폴백: `system-ui`, `-apple-system`, `sans-serif`.
 
 ### 3.3. 라이선스
