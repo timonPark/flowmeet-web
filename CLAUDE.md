@@ -92,6 +92,17 @@ npm run lint
 - 클라이언트 캐시: **React Query v5**. 낙관 업데이트가 필요한 흐름(화자 매칭·녹음 상태·토글) 은 RQ mutation, 폼 제출은 Server Actions + `revalidateTag` 혼용.
 - Server Action 내부에서도 **반드시 `serverClient`** 사용 (직접 `fetch` 금지).
 
+## 상태 관리
+
+> 상세: [`docs/axis-decisions/state-management.md`](docs/axis-decisions/state-management.md) (이슈 #3)
+
+- **서버 데이터**: React Query (#2). "RQ 가 가지고 있으면 Zustand 에 넣지 않는다".
+- **인증 세션** (user, role, 메모리 accessToken): React Context `AuthProvider` — `src/app/providers.tsx`.
+- **UI 상태 / 피처 로컬 상태**: Zustand slice — `src/lib/stores/{uiStore,recordingStore,speakerMatchStore,...}.ts`. Provider 없음, 셀렉터 패턴 필수.
+- **폼 상태**: 폼 라이브러리가 담당 (#4). 폼 중간값을 Zustand/Context 로 복제 금지.
+- Store 안에서 직접 `fetch` 호출 금지. 서버 통신은 RQ `queryFn`·Server Action 경유.
+- 녹음 chunk 등 바이너리 영속화는 Zustand `persist` 가 아닌 전용 IndexedDB 레이어로 분리. Zustand 는 메타데이터만.
+
 ## 참고 문서
 
 - TRD: `../outputs/TRD_조직지시_업무흐름관리플랫폼.md`
