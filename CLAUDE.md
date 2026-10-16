@@ -109,6 +109,7 @@ npm run lint
 - Refresh Token: HttpOnly 쿠키 (세부 정책은 #19 `web-security` 에서 확정)
 - fetch wrapper 는 **서버/클라 분리**: `src/lib/api/serverClient.ts`, `src/lib/api/browserClient.ts`, 공통 `_core.ts`. 한 함수에 환경 분기 금지.
 - 서버 데이터는 **기본 dynamic**, 캐시는 `'use cache'` + `cacheLife` + `cacheTag` 로 명시 opt-in (Next 16 `cacheComponents` 모델). "`fetch` 는 알아서 캐시" 전제는 **틀림**.
+- **`'use cache'` 함수 안에서 `cookies()`/`headers()` 접근 금지** — 사용자 간 캐시 오염 위험. 사용자별 데이터는 **`userId` 를 함수 인수로 받아 캐시 키를 자동 격리** (캐시 키는 함수 인수가 결정, `cacheTag` 는 **무효화 라벨**이지 격리 수단 아님). 캐시 안의 백엔드 호출은 `serverClient` (쿠키 자동 주입) 대신 **익명 클라이언트** 사용.
 - 클라이언트 캐시: **React Query v5**. 낙관 업데이트가 필요한 흐름(화자 매칭·녹음 상태·토글) 은 RQ mutation, 폼 제출은 Server Actions + `revalidateTag` 혼용.
 - Server Action 내부에서도 **반드시 `serverClient`** 사용 (직접 `fetch` 금지).
 
@@ -142,7 +143,12 @@ npm run lint
 - `ApiError` / `ApiErrorCode` / `codeToMessage` 는 **`src/lib/errors/`** 에 집중. api 리포 `ErrorCode` 와 1:1 미러, union 밖은 `UNKNOWN`.
 - **중앙 메시지 테이블 1건** (`src/lib/errors/messages.ts`). 폼 쪽은 import 재사용, 중복 금지.
 - RQ 기본: `queries.throwOnError: true` (섹션 ErrorBoundary 로 bubbling), `mutations.onError: 전역 토스트`. 호출부가 override 가능.
-- 비-폼 Server Action 은 `ActionResult<T>` (ok discriminated union). 폼 `FormActionResult` 와 shape 통일. **throw 금지**.
+- 비-폼 Server Action 은 `ActionResult<T>` (ok discriminated union). 폼 `FormActionResult` 와 shape 통일.
+- Server Action throw 정책 — **오류 성격에 따라 다름**:
+  - 예상 가능한 도메인/검증 오류 → `ActionResult` 반환 (반환 타입에 포함)
+  - 세션 만료 → `redirect('/login')` (제어 흐름을 끊음 — `ActionResult` 반환하지 않음)
+  - 예상 못한 예외 → `reportError` 로깅 후 throw (`ActionResult` 반환 타입 밖. 호출 경로에 따라 에러 바운더리 전달 지점 다름 — 통합 테스트로 확인)
+  - **모든 예외를 조용히 `ActionResult` 로 변환 금지** — 관측 누락. 상세는 error-ux.md §F.
 - 토스트는 `uiStore.toast.{error,success,...}` 추상 API. 중복 deduping은 `uiStore` 가 보장.
 - 로깅 훅: **`reportError(err, ctx)`** 추상. **외부 SaaS 벤더 미도입** (#8). 구현은 `src/lib/errors/reportError.ts` 가 **구조화 JSON `console.error`**. 추후 자체 백엔드 수집 엔드포인트 생기면 함수 내부에서 조건부 fetch 추가 — 호출부 변경 없음.
 

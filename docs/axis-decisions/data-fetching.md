@@ -39,9 +39,94 @@ flowmeet-web은 Next.js 16.4 (`cacheComponents: true` + `partialPrefetching: tru
   - **회의실 캘린더 뷰** (TRD §4.2 — 일/주간) → `'use cache'` + `cacheLife('minutes')` + `cacheTag('calendar:{roomId}:{yyyy-ww}')`
   - **마스터 데이터** (팀 목록, 회의실 목록 등) → `'use cache'` + `cacheLife('hours')`
 - 캐시 미적용 (dynamic 유지):
-  - **사용자별 리스트** (내 회의, 내 지시) — 세션 쿠키 기반, 캐시 공유 위험
+  - **사용자별 리스트** (내 회의, 내 지시) — 세션 쿠키 기반, 캐시 공유 위험 (아래 **인증 경계 규칙** 참조)
   - **회의 상세·녹음·화자매칭 등 상호작용 리소스** — 변화 빈도 높음, 아래 B3 에서 클라 캐시로 처리
 - 무효화: 쓰기 Server Action 또는 Route Handler 후 `revalidateTag(...)` / `updateTag(...)` 호출.
+
+#### A1-보강: `'use cache'` + 인증 경계 (사용자 간 캐시 오염 방지)
+
+> 2026-10-16 #15 리뷰 → 이 PR 재리뷰 반영. 캐시 격리 메커니즘 정정 (`cacheTag` 혼동 + `serverClient` 자동 토큰 주입 충돌).
+
+**Next 16 캐시 모델 정확 이해**:
+- `'use cache'` 함수의 **캐시 키는 함수 인수** (와 캡처된 모듈 수준 식별자) 로 결정됨
+- `cacheTag(label)` 는 **무효화 라벨** — 나중에 `revalidateTag(label)` 로 그 라벨의 캐시들을 한꺼번에 지우기 위한 것. **캐시 키 격리 수단이 아니다**
+- 따라서 사용자별 격리는 **`userId` 를 함수 인수로 받는 것 자체** 가 하는 일. `cacheTag` 는 그 위에 무효화 편의를 더해줄 뿐.
+
+**금지**:
+- `'use cache'` 함수 안에서 `cookies()` / `headers()` / `draftMode()` 접근 금지 — 요청 컨텍스트가 캐시 키에 반영되지 않아 사용자 간 응답 공유.
+- `'use cache'` 함수 안에서 **인증 토큰이 필요한 API** 를 호출 금지 — 토큰이 어떤 방식으로든 응답에 섞이면 캐시 오염.
+
+**`serverClient` 와의 충돌 (중요)**:
+- 설계상 `serverClient` 는 **`cookies()` 로 Access Token 을 자동 주입** (§D2). 따라서 **`'use cache'` 함수 안에서 `serverClient` 호출 금지가 디폴트**.
+- 캐시 안에서 백엔드 호출이 필요하면 두 선택지:
+  - **(선호) `serverClient` 가 아닌 "서버-서버 전용 익명 클라이언트"** (예: `publicApiClient`) — 사용자 토큰 없이 백엔드 공용 엔드포인트 호출. 백엔드가 API 키 등으로 인증.
+  - 또는 `serverClient` 를 쓰되 요청에 토큰이 들어가지 않도록 **명시 옵션** (예: `serverClient.get(url, { withAuth: false })`). 백엔드 공용 엔드포인트 전용.
+
+**사용자별 데이터 패턴**:
+
+**(A) 캐시 밖에서 인증·개인화** (권장): 캐시 함수는 **진짜 공용 데이터** 만. 사용자별 필터링·조회는 캐시 호출 뒤에서.
+```ts
+// 캐시: 익명 클라이언트로 공용 데이터만
+async function getPublicDashboardTemplate(teamId: string) {
+  'use cache';
+  cacheLife('hours');
+  cacheTag(`dashboard:template:${teamId}`);           // 무효화용 라벨
+  return publicApiClient.get(`/teams/${teamId}/dashboard-template`);
+}
+
+// 캐시 밖: 세션 조회 + 개인화
+async function getMyDashboard() {
+  const userId = await getUserIdFromCookies();        // 세션 조회 (캐시 밖)
+  const template = await getPublicDashboardTemplate(getTeamId(userId));
+  return personalize(template, userId);               // 개인화 (캐시 밖)
+}
+```
+
+**(B) `userId` 를 함수 인수로** — 캐시 키 자체가 사용자별 분리:
+```ts
+async function getUserMeetings(userId: string) {
+  'use cache';
+  cacheLife('minutes');
+  cacheTag(`meetings:user:${userId}`);                // 라벨: 이 유저 변경 시 무효화
+  // 인수 userId 로 캐시 키 자동 분리. 토큰 없이 백엔드 호출.
+  return publicApiClient.get(`/users/${userId}/meetings`);
+}
+
+// 호출자(RSC)가 cookies() 로 userId 얻어 전달
+export default async function Page() {
+  const userId = await getUserIdFromCookies();
+  const meetings = await getUserMeetings(userId);
+  // ...
+}
+```
+
+**팀 공용 ≠ 완전 공개**:
+- `getPublicDashboardTemplate` 같은 "팀 공용" 데이터도 **접근 권한이 있는 사용자에게만 보여줘야 한다면** 공용 캐시로 묶기 전에 호출 측에서 권한 검사. 캐시에 넣는 건 "같은 팀이면 같은 응답을 받아도 되는" 데이터뿐.
+- 완전 공개 (anonymous OK) 가 아니면 캐시 키에 팀 ID 는 포함되지만 **권한 검사는 캐시 밖**에서.
+
+**금지 예 (사고 패턴)**:
+```ts
+// ❌ 캐시 안에서 cookies()
+async function getMyMeetings() {
+  'use cache';
+  cacheLife('minutes');
+  const token = (await cookies()).get('access_token');
+  return serverClient.get('/me/meetings', { token });
+}
+
+// ❌ serverClient 가 암묵적으로 cookies() 호출 (설계상)
+async function getMyMeetings() {
+  'use cache';
+  cacheLife('minutes');
+  return serverClient.get('/me/meetings');  // serverClient 내부에서 cookies() 접근
+}
+```
+
+**PR 리뷰 체크** (`data-fetching-guard` 스킬 입력):
+- `'use cache'` 함수 안에서 `cookies()`/`headers()`/`draftMode()` import 또는 호출 금지
+- `'use cache'` 안에서 `serverClient.*` 호출 금지 (암묵적 토큰 주입). 캐시 가능한 호출은 `publicApiClient` 또는 명시적 익명 옵션.
+- 사용자별 캐시는 **`userId` 를 함수 인수로** 받아 캐시 키 자동 격리. `cacheTag` 는 추가 무효화 편의일 뿐.
+- 팀 공용 캐시도 **호출 측에서 권한 검사** 를 거친 뒤에만 호출.
 
 ### B3. 클라이언트 캐시 — React Query v5
 

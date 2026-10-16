@@ -206,7 +206,50 @@ export type ActionResult<T = unknown> =
 
 - `FormActionResult` (#4) 와 **shape 통일** (ok discriminated union).
 - 폼은 `fieldErrors` 를 추가로 가짐 — 폼 shape 는 `ActionResult` 를 **확장**.
-- Server Action 은 **throw 하지 않는다** — 예외는 세션 만료 `redirect('/login')` 뿐.
+
+#### F-보강: throw 정책 — 오류의 성격에 따라 다르다
+
+> 2026-10-16 #15 리뷰 보강. 초기 결정은 "Server Action 은 throw 하지 않는다 — 세션 만료 `redirect('/login')` 뿐" 으로 단정했으나 — **예상 못한 예외까지 조용히 `ActionResult` 로 변환하면 에러 바운더리·관측(reportError) 이 bypass 된다**. 오류의 성격에 따라 분기 정책을 명시한다.
+
+| 오류 성격 | 처리 |
+|---|---|
+| **예상 가능한 도메인·검증 오류** (zod 실패, 중복, 권한 거부, 비즈니스 룰 위반 등) | **`ActionResult`/`FormActionResult` 로 반환**. UI 가 필드 에러·토스트·인라인으로 처리. |
+| **세션 만료 (401)** | `redirect('/login')` — 반환 shape 이전에. |
+| **예상 못한 예외** (DB 다운·네트워크 장애·버그·외부 서비스 실패 등) | **`reportError` 로 로깅 후 throw**. 호출 경로에 따라 전달 지점이 다름 (아래 §F-주 참조). |
+
+> **§F-주 — Server Action throw 의 호출 경로별 전달**:
+> - **클라이언트에서 직접 호출** (`onClick` 핸들러 등): `try/catch` 가 없으면 React 가 rejected promise 로 처리 — RQ `onError` / Error Boundary (`react-error-boundary`) 가 잡음. 섹션 `error.tsx` 로 직접 가지 않을 수 있다.
+> - **`<form action={action}>` 네이티브 form 액션**: React 가 pending/error 상태를 폼에 반영. error boundary 전달 여부는 React 19 사양 확인 필요.
+> - **RSC 중 `await createMeetingAction(...)`** (서버 랜더 중 호출): 섹션 `error.tsx` 로 bubble.
+>
+> **결론**: throw 는 "에러 바운더리로 자동 이동" 이라고 **단정하지 말고**, 호출부가 명시적으로 처리하지 않을 때 어디로 가는지 **각 패턴 구현 시 통합 테스트로 확인**. 실측 결과를 이 문서에 축적.
+
+```ts
+export async function createMeetingAction(input: unknown): Promise<ActionResult<{ id: string }>> {
+  // 예상 가능 — 반환
+  const parsed = createMeetingSchema.safeParse(input);
+  if (!parsed.success) return mapZodErrorToActionResult(parsed.error);
+
+  try {
+    return await createMeetingLogic(parsed.data, serverClient);
+  } catch (err) {
+    // 예상 가능한 도메인 에러는 반환
+    if (err instanceof ApiError && isDomainErrorCode(err.code)) {
+      return { ok: false, code: err.code, message: codeToMessage(err.code) };
+    }
+    // 예상 못한 예외는 로깅 후 throw — 조용히 변환 금지
+    reportError(err, { source: 'server-action:createMeeting' });
+    throw err;
+  }
+}
+```
+
+**금지 패턴**:
+- 모든 예외를 `ActionResult` 로 변환 (관측 누락 + 에러 바운더리 bypass)
+- 예상 가능 오류를 throw (사용자 경험이 거침, 에러 바운더리까지 올라감)
+- `reportError` 호출 없이 throw (관측 공백)
+
+**이 정책은 `app-router-layering` 스킬 §5.3 과 동기화**.
 
 ### G. 로깅 훅 (#8 교체 예정)
 
