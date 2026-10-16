@@ -22,6 +22,19 @@ git push -u origin feature/<issue>-<slug>
 gh pr create --fill
 ```
 
+## PR·머지 가드레일
+
+> 상세: [`docs/axis-decisions/operations.md`](docs/axis-decisions/operations.md) (이슈 #9)
+
+- **PR 자동 머지 금지** — GitHub `Auto-merge` / "Merge when ready" 체크 금지. **사람이 눌러야 머지**. (api 2026-10-14 사고 조항 그대로)
+- **머지 방식: squash 고정** — "Create a merge commit" / "Rebase and merge" 금지.
+- **`main` 브랜치 보호** — 직접 push 금지, PR 필수. CI 통과 필수 조건은 CI workflow 생긴 뒤 활성화.
+- **PR 템플릿**: `.github/pull_request_template.md` — 요약·변경·테스트·codex 리뷰 상태·의존 이슈 포함.
+- **codex 외부 리뷰 필수**: 모든 PR 머지 전에 `codex-review-triage` 흐름 (6단계) 완료. 산출물 `codereview/<YYYYMMDD>/<slug>.md` (로컬 전용, `.gitignore`). 유효 지적만 반영, Claude triage 생략 금지. **사람 리뷰 대체 아님**.
+- **CI (예정)**: GitHub Actions. PR 당 `lint` + `tsc --noEmit` + `npm test` + 조건부 Playwright E2E. 실패 시 머지 블로킹. 커버리지 하드 게이트 없음.
+- **PR 리뷰 체크리스트**: 별도 문서 없음 — **이 CLAUDE.md 의 각 섹션 (API 통신·상태 관리·폼·에러·테스트·a11y·로깅 등) 이 그대로 체크리스트**. PR 리뷰 시 scan.
+- **작업 로그**: `.claude/work_history/` 미도입. 결정은 `docs/axis-decisions/`, 변경 이유는 커밋/PR, 구조는 CLAUDE.md. 중복 소스 금지.
+
 ## 기술 스택
 
 - Next.js 16 (App Router) + React 19 + TypeScript 5
