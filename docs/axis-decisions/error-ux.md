@@ -215,7 +215,14 @@ export type ActionResult<T = unknown> =
 |---|---|
 | **예상 가능한 도메인·검증 오류** (zod 실패, 중복, 권한 거부, 비즈니스 룰 위반 등) | **`ActionResult`/`FormActionResult` 로 반환**. UI 가 필드 에러·토스트·인라인으로 처리. |
 | **세션 만료 (401)** | `redirect('/login')` — 반환 shape 이전에. |
-| **예상 못한 예외** (DB 다운·네트워크 장애·버그·외부 서비스 실패 등) | **`reportError` 로 로깅 후 throw** → Next 의 에러 바운더리 (`error.tsx` / `global-error.tsx`) 가 받음. |
+| **예상 못한 예외** (DB 다운·네트워크 장애·버그·외부 서비스 실패 등) | **`reportError` 로 로깅 후 throw**. 호출 경로에 따라 전달 지점이 다름 (아래 §F-주 참조). |
+
+> **§F-주 — Server Action throw 의 호출 경로별 전달**:
+> - **클라이언트에서 직접 호출** (`onClick` 핸들러 등): `try/catch` 가 없으면 React 가 rejected promise 로 처리 — RQ `onError` / Error Boundary (`react-error-boundary`) 가 잡음. 섹션 `error.tsx` 로 직접 가지 않을 수 있다.
+> - **`<form action={action}>` 네이티브 form 액션**: React 가 pending/error 상태를 폼에 반영. error boundary 전달 여부는 React 19 사양 확인 필요.
+> - **RSC 중 `await createMeetingAction(...)`** (서버 랜더 중 호출): 섹션 `error.tsx` 로 bubble.
+>
+> **결론**: throw 는 "에러 바운더리로 자동 이동" 이라고 **단정하지 말고**, 호출부가 명시적으로 처리하지 않을 때 어디로 가는지 **각 패턴 구현 시 통합 테스트로 확인**. 실측 결과를 이 문서에 축적.
 
 ```ts
 export async function createMeetingAction(input: unknown): Promise<ActionResult<{ id: string }>> {

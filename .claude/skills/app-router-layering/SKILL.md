@@ -206,29 +206,36 @@ page.tsx (Server)
 
 ### 4.3. `'use cache'` 와 인증 경계 (매우 중요)
 
-- **`'use cache'` 함수 안에서 `cookies()` / `headers()` 를 직접 읽지 않는다** — 캐시가 사용자 간 공유되면 **다른 사용자의 응답을 받을 위험**.
-- 사용자별 데이터가 필요한 경우:
-  - **Option A (권장)**: 캐시 함수는 **공용 데이터만** 로드 (조직 공용 리스트 등). 사용자별 필터링·조회는 **캐시 밖**에서 수행.
-  - **Option B**: 캐시 함수를 **`userId` / `teamId` 를 명시 인수** 로 받고 `cacheTag('x:userId:${id}')` 로 격리. 호출자 (서버 컴포넌트) 가 `cookies()` 로 userId 를 얻어 전달.
-- **금지**:
-  ```ts
-  // ❌ 사용자 간 캐시 오염
-  async function getMyMeetings() {
-    'use cache';
-    cacheLife('minutes');
-    const token = (await cookies()).get('access_token');  // ← 캐시 안에서 cookies() 금지
-    return serverClient.get('/me/meetings', { token });
-  }
+**Next 16 캐시 모델 정확 이해**:
+- 캐시 키는 **함수 인수** (+ 모듈 수준 캡처) 로 결정. 사용자별 격리는 **`userId` 를 인수로** 받는 것 자체가 함.
+- `cacheTag(label)` 는 **무효화 라벨** 이지 캐시 키 격리 수단이 아님.
 
-  // ✅ userId 를 명시 인수로, 캐시 태그로 격리
-  async function getUserMeetings(userId: string) {
-    'use cache';
-    cacheLife('minutes');
-    cacheTag(`meetings:user:${userId}`);
-    return serverClient.get(`/users/${userId}/meetings`);
-  }
-  ```
-- 상세 패턴·예외는 [#2 data-fetching](../../../docs/axis-decisions/data-fetching.md) 참조 (추후 보강 예정).
+**금지**:
+- `'use cache'` 함수 안에서 `cookies()` / `headers()` / `draftMode()` 접근.
+- `'use cache'` 함수 안에서 **인증 토큰이 섞인 API 호출** — 토큰이 응답에 영향을 주면 사용자 간 캐시 오염.
+- **`serverClient` 호출** 도 금지 — 설계상 `serverClient` 가 `cookies()` 로 토큰을 자동 주입하므로 캐시 안 호출은 암묵적으로 위 금지에 걸림. 캐시 안의 백엔드 호출은 **공용 익명 클라이언트** (예: `publicApiClient`) 를 쓰거나 명시 익명 옵션.
+
+**패턴**:
+```ts
+// ❌ 사용자 간 캐시 오염
+async function getMyMeetings() {
+  'use cache';
+  cacheLife('minutes');
+  return serverClient.get('/me/meetings');  // serverClient 가 cookies() 접근 — 금지
+}
+
+// ✅ userId 를 함수 인수로 — 캐시 키 자동 격리
+async function getUserMeetings(userId: string) {
+  'use cache';
+  cacheLife('minutes');
+  cacheTag(`meetings:user:${userId}`);           // 라벨: revalidateTag 용
+  return publicApiClient.get(`/users/${userId}/meetings`);  // 익명 클라이언트
+}
+```
+
+**팀 공용 캐시**: "같은 팀이면 같은 응답을 받아도 되는" 진짜 공용 데이터만. 접근 권한 검사는 **캐시 밖** 에서.
+
+상세 패턴·예외는 [#2 data-fetching](../../../docs/axis-decisions/data-fetching.md) §A1-보강 참조.
 
 ---
 
