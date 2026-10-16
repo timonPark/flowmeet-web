@@ -80,12 +80,17 @@ npm run lint
 - **회의실 캘린더**: 웹은 일·주간 캘린더, 모바일은 날짜별 예약 목록. (TRD §4.2)
 - **대시보드**: `dashboardType=MEETING | TEAM` 분기. 팀 대시보드는 지연 업무(업무명·담당자·기한·지연일수)를 표시. (TRD §8)
 
-## API 통신
+## API 통신 / 데이터 페칭
+
+> 상세: [`docs/axis-decisions/data-fetching.md`](docs/axis-decisions/data-fetching.md) (이슈 #2)
 
 - `flowmeet-api` 베이스 URL: `process.env.NEXT_PUBLIC_API_BASE_URL`
-- 인증: `Authorization: Bearer <accessToken>`
-- Refresh Token은 쿠키 또는 안전한 스토리지에 보관 (XSS 리스크 고려)
-- API 클라이언트는 `src/lib/api/`에 레이어로 분리 예정
+- 인증: `Authorization: Bearer <accessToken>` — fetch wrapper 가 자동 주입
+- Refresh Token: HttpOnly 쿠키 (세부 정책은 #19 `web-security` 에서 확정)
+- fetch wrapper 는 **서버/클라 분리**: `src/lib/api/serverClient.ts`, `src/lib/api/browserClient.ts`, 공통 `_core.ts`. 한 함수에 환경 분기 금지.
+- 서버 데이터는 **기본 dynamic**, 캐시는 `'use cache'` + `cacheLife` + `cacheTag` 로 명시 opt-in (Next 16 `cacheComponents` 모델). "`fetch` 는 알아서 캐시" 전제는 **틀림**.
+- 클라이언트 캐시: **React Query v5**. 낙관 업데이트가 필요한 흐름(화자 매칭·녹음 상태·토글) 은 RQ mutation, 폼 제출은 Server Actions + `revalidateTag` 혼용.
+- Server Action 내부에서도 **반드시 `serverClient`** 사용 (직접 `fetch` 금지).
 
 ## 참고 문서
 
