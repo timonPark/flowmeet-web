@@ -116,7 +116,14 @@ navigation / prefetch                            (from `next/dist/server/request
 - Next 16 은 20.9 미만에서 설치/실행 실패 (`engines` 명시 유무와 무관).
 - nvm 사용 (`nvm use 22` 권장, CLAUDE.md 명시).
 
-### 2.8. `AGENTS.md` 자동 생성 블록
+### 2.8. `middleware.ts` → **`proxy.ts`** 전환
+
+- Next 16 부터 **`middleware.ts` 가 `proxy.ts` 로 교체** 중. `node_modules/next/dist/lib/constants.js` 에 `PROXY_FILENAME = 'proxy'` 가 공식 상수로 존재.
+- **두 파일이 동시에 존재하면 Next 가 거부** (에러: *"Both middleware file and proxy file are detected. Please use proxy file only."*). 공식 안내: `https://nextjs.org/docs/messages/middleware-to-proxy`.
+- 신규 작성은 `src/proxy.ts`. 기존 `middleware.ts` 는 리네임.
+- Opus/Sonnet 학습 데이터는 **`middleware.ts` 를 기본** 으로 가정 — Next 16 리포에선 틀림.
+
+### 2.9. `AGENTS.md` 자동 생성 블록
 
 - `next dev` 가 `AGENTS.md` 를 **쓰고 복원**한다. 삭제해도 다시 나타남.
 - 블록 소스: `node_modules/next/dist/server/lib/generate-agent-files.js` (현재 설치본 기준 포인터).
