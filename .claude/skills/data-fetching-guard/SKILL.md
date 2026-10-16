@@ -55,6 +55,7 @@ export type RequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   headers?: Record<string, string>;
+  params?: Record<string, string | number | undefined>;  // query string — buildUrl 안에서 조립
   signal?: AbortSignal;
 };
 
@@ -73,7 +74,17 @@ export async function parseResponse<T>(res: Response): Promise<T> {
     if (res.status === 204) return undefined as T;
     const text = await res.text();
     if (!text) return undefined as T;
-    return JSON.parse(text) as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch (cause) {
+      // 성공 응답인데 malformed JSON — ApiError 로 정규화 (상위 일관 처리)
+      throw new ApiError({
+        code: 'INVALID_RESPONSE',
+        status: res.status,
+        message: '서버 응답을 해석할 수 없습니다',
+        cause,
+      });
+    }
   }
 
   let body: Record<string, unknown> = {};
@@ -86,20 +97,29 @@ export async function parseResponse<T>(res: Response): Promise<T> {
 
   const code = typeof body.code === 'string' ? body.code : 'UNKNOWN';
   const message = typeof body.message === 'string' ? body.message : '요청을 처리하지 못했습니다';
-  const fieldErrors = isFieldErrorsShape(body.fieldErrors) ? body.fieldErrors : undefined;
+  const fieldErrors = toFieldErrors(body.fieldErrors);
 
   throw new ApiError({ code, status: res.status, message, fieldErrors, cause: body });
 }
 
-function isFieldErrorsShape(v: unknown): v is Record<string, string[]> {
-  // 간단 가드. 상세는 피처 요구시 확장.
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
+function toFieldErrors(v: unknown): Record<string, string[]> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (Array.isArray(val) && val.every((m) => typeof m === 'string')) {
+      out[k] = val as string[];
+    }
+    // 외의 shape 는 drop — 호출자에게 깔끔한 string[] 만 전달
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 ```
 
 - `BASE_URL` 은 `NEXT_PUBLIC_API_BASE_URL` 환경변수. 미설정 시 localhost 폴백 (dev 편의).
-- `parseResponse` 는 **204 / 비-JSON 안전 처리** ([#16 error-ux](../error-ux/SKILL.md) §3 참조).
+- `parseResponse` 는 **204 / 비-JSON / malformed JSON 안전 처리** — 성공 응답의 malformed JSON 도 `ApiError({ code: 'INVALID_RESPONSE' })` 로 정규화 ([#16 error-ux](../error-ux/SKILL.md) §3 참조).
+- `fieldErrors` 는 **각 값이 `string[]` 인지 검증** 후 통과 — 서버가 잘못된 shape 를 줘도 호출자는 깔끔한 `Record<string, string[]>` 만 받음.
 - `ApiError` 생성 책임은 _core 에만.
+- 각 wrapper 는 `opts.params` 를 받아 `buildUrl(path, opts.params)` 로 조립 — 호출자가 직접 `buildUrl` 쓰지 않도록 (URL 조립 책임 통일).
 
 ---
 
@@ -111,7 +131,7 @@ import 'server-only';  // 클라 import 시 번들 에러 유도
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { buildUrl, parseResponse, type RequestOptions } from './_core';
-import { refreshTokenAction } from '@/features/auth/actions';  // 서버 액션으로 refresh
+import { refreshAccessTokenServer } from '@/features/auth/refresh.server';  // 서버 전용 일반 함수 (Server Action 아님)
 
 async function execute<T>(path: string, opts: RequestOptions, retriedWithFreshToken = false): Promise<T> {
   const cookieStore = await cookies();
@@ -132,7 +152,7 @@ async function execute<T>(path: string, opts: RequestOptions, retriedWithFreshTo
   });
 
   if (res.status === 401 && !retriedWithFreshToken) {
-    const refreshed = await refreshTokenAction();  // 서버에서 refresh token 쿠키로 재발급
+    const refreshed = await refreshAccessTokenServer();
     if (refreshed.ok) return execute<T>(path, opts, true);
     redirect('/login');  // 특수 예외 — Next 가 처리
   }
@@ -155,6 +175,7 @@ export const serverClient = {
 - Refresh 실패 시 `redirect('/login')` — **특수 예외** 라서 호출자 catch 가 이를 재throw 해야 함 ([#16 §7.2](../error-ux/SKILL.md)).
 - Access Token 은 HttpOnly 쿠키에서 (XSS 방어). 상세는 #19 `web-security`.
 - `fetch` 에 캐시 옵션 명시하지 않음 — `cacheComponents: true` 하에서 상위 `'use cache'` 가 결정.
+- **Refresh 로직은 Server Action 이 아니라 서버 전용 일반 함수** (`refresh.server.ts`) 로 분리. Server Action 은 UI 가 호출하는 전용 wrapper 로 사용 (`refreshTokenAction`). 두 경로가 같은 helper 를 호출하도록 설계 — Server Action 을 서버 코드 깊은 곳에서 직접 호출하는 패턴은 **컨텍스트 제약으로 깨질 수 있음**.
 
 ---
 
@@ -165,6 +186,25 @@ export const serverClient = {
 import { getAccessToken, setAccessToken, logout } from '@/features/auth/AuthContext';
 import { refreshTokenViaAction } from '@/features/auth/refresh';
 import { buildUrl, parseResponse, type RequestOptions } from './_core';
+
+// Single-flight refresh — 동시 다발 401 요청이 refresh 를 중복 호출하지 않도록
+let inflightRefresh: Promise<string | null> | null = null;
+
+async function doRefreshOnce(): Promise<string | null> {
+  if (!inflightRefresh) {
+    inflightRefresh = (async () => {
+      try {
+        return await refreshTokenViaAction();
+      } catch {
+        return null;
+      } finally {
+        // 다음 refresh 사이클을 위해 reset — then 체인 밖에서
+        setTimeout(() => { inflightRefresh = null; }, 0);
+      }
+    })();
+  }
+  return inflightRefresh;
+}
 
 async function execute<T>(path: string, opts: RequestOptions, retriedWithFreshToken = false): Promise<T> {
   const token = getAccessToken();
@@ -182,15 +222,20 @@ async function execute<T>(path: string, opts: RequestOptions, retriedWithFreshTo
   });
 
   if (res.status === 401 && !retriedWithFreshToken) {
-    try {
-      const newToken = await refreshTokenViaAction();  // Server Action 호출 — 쿠키 접근은 서버에서만
+    const newToken = await doRefreshOnce();  // single-flight — 다른 요청들과 공유
+    if (newToken) {
       setAccessToken(newToken);
       return execute<T>(path, opts, true);
-    } catch {
-      logout();
-      // 호출자(RQ onError 또는 호출부)가 UX 처리. 여기선 던짐.
-      throw new Error('SESSION_EXPIRED');
     }
+    // refresh 실패 → 세션 만료 처리
+    logout();
+    throw new Error('SESSION_EXPIRED');
+  }
+
+  // retriedWithFreshToken 이 true 인데 또 401 이면 세션 만료 (refresh 가 stale 토큰 돌려줬거나 서버 상태 불일치)
+  if (res.status === 401 && retriedWithFreshToken) {
+    logout();
+    throw new Error('SESSION_EXPIRED');
   }
 
   return parseResponse<T>(res);
@@ -208,7 +253,8 @@ export const browserClient = {
 **핵심 규칙**:
 - Access Token 은 **메모리/`AuthContext`** 에서. `localStorage` 금지 (XSS 리스크, #19).
 - Refresh 는 **Server Action 호출** 로 위임 (HttpOnly refresh cookie 접근은 서버에서만).
-- 401 refresh 1회만, 실패 시 `logout()` + throw.
+- **동시 401 요청이 refresh 를 중복 호출하지 않도록 single-flight** — `inflightRefresh` promise 를 공유. Refresh token rotation 쓰는 경우 이 가드 없으면 **일부 요청이 stale token 으로 재발급 실패**.
+- 401 refresh 1회만, 실패 또는 재요청도 401이면 `logout()` + throw.
 - `AbortSignal` 통해 **요청 취소** 지원 (RQ 가 unmount 시 자동 전달).
 
 ---
@@ -296,7 +342,13 @@ export async function getPublicDashboardTemplate(teamId: string) {
 - `teamId` 가 **함수 인수** → 팀별 캐시 키 자동 격리.
 - 호출자 (RSC) 가 세션에서 teamId 를 얻어 전달.
 
-### 6.3. 사용자별 데이터 캐시 — 패턴 B
+### 6.3. 사용자별 데이터 캐시 — 패턴 B (주의사항 많음)
+
+> **보안 경고**: "`userId` 를 함수 인수로 받는 것" 은 **캐시 키 격리** 수단일 뿐 **인증·권한 수단이 아니다**. 아래 둘 중 하나가 **백엔드 측에서 반드시 보장** 돼야 안전:
+> 1. 해당 엔드포인트가 **익명 접근 가능** (예: 공개 프로필) — 토큰 없이 `userId` 만으로 조회해도 보안상 괜찮음
+> 2. 또는 백엔드가 **API 키 등 다른 수단으로 인증** 후 요청의 `userId` 가 세션 사용자와 일치하는지 **서버 측 재검증**
+>
+> 둘 다 아니면 (= 토큰 기반 인증 필수인 평범한 사용자 데이터) **이 패턴 쓰면 사용자 데이터 노출 사고**. 그 경우는 §6.4 "캐시 안 함" 으로 가야 함.
 
 ```ts
 // src/features/meeting/queries.ts
@@ -304,21 +356,28 @@ import 'server-only';
 import { cacheLife, cacheTag } from 'next/cache';
 import { publicApiClient } from '@/lib/api/publicApiClient';
 
-export async function getUserMeetings(userId: string) {
+// ⚠️ 백엔드 /users/${userId}/public-profile 이 익명 접근 가능하거나 세션 재검증이 보장될 때만.
+// 평범한 토큰 기반 사용자 데이터면 이 패턴 금지 — §6.4 로.
+export async function getUserPublicProfile(userId: string) {
   'use cache';
   cacheLife('minutes');
-  cacheTag(`meetings:user:${userId}`);  // 라벨
-  // 캐시 키는 userId 인수가 담당 (cacheTag 는 무효화 전용)
-  return publicApiClient.get<Meeting[]>(`/users/${userId}/meetings`);
+  cacheTag(`profile:user:${userId}`);  // 무효화 라벨
+  // 캐시 키는 userId 인수가 담당
+  return publicApiClient.get<PublicProfile>(`/users/${userId}/public-profile`);
 }
 
 // 호출자 (RSC)
 export default async function Page() {
   const userId = await getUserIdFromCookies();  // 세션 조회 (캐시 밖)
-  const meetings = await getUserMeetings(userId);
-  return <MeetingList items={meetings} />;
+  const profile = await getUserPublicProfile(userId);
+  return <ProfileView data={profile} />;
 }
 ```
+
+**결정 트리 — 어느 패턴?**:
+- 백엔드 엔드포인트가 **토큰 기반 인증** 필수? → §6.4 "캐시 안 함"
+- **익명 접근 가능** 또는 **서버 측 세션 재검증** 보장? → §6.3 패턴 B 가능
+- 애매하면 **§6.4 로 시작** → 성능 문제 생기면 백엔드 팀과 상의 후 캐시 가능 엔드포인트 신설
 
 ### 6.4. 캐시 안 함 — 민감 사용자별 데이터
 
@@ -419,24 +478,58 @@ export function useUpdateMeeting(id: string) {
 
 ### 7.4. 서버 → 클라 Hydration
 
+**queryFn 은 환경 전용** — 서버 prefetch 에서는 `browserClient` (AuthContext 접근) 를 **쓰면 실행 실패**. 서버용·클라용 파일을 **분리**.
+
+```ts
+// src/features/meeting/serverQueries.ts (서버 전용)
+import 'server-only';
+import { queryOptions } from '@tanstack/react-query';
+import { serverClient } from '@/lib/api/serverClient';
+import { meetingKeys } from './queryKeys';
+
+export function meetingDetailServerQuery(id: string) {
+  return queryOptions({
+    queryKey: meetingKeys.detail(id),
+    queryFn: ({ signal }) => serverClient.get<Meeting>(`/meetings/${id}`, { signal }),
+  });
+}
+```
+
+```ts
+// src/features/meeting/queries.ts (클라 전용)
+import { queryOptions } from '@tanstack/react-query';
+import { browserClient } from '@/lib/api/browserClient';
+import { meetingKeys } from './queryKeys';
+
+export function meetingDetailQuery(id: string) {
+  return queryOptions({
+    queryKey: meetingKeys.detail(id),  // 같은 key — 서버가 prefetch 한 데이터를 클라가 재사용
+    queryFn: ({ signal }) => browserClient.get<Meeting>(`/meetings/${id}`, { signal }),
+  });
+}
+```
+
 ```tsx
-// 서버에서 prefetch
+// src/app/meeting/[id]/page.tsx (서버)
 import { QueryClient, dehydrate, HydrationBoundary } from '@tanstack/react-query';
-import { meetingDetailQuery } from '@/features/meeting/queries';
+import { meetingDetailServerQuery } from '@/features/meeting/serverQueries';
+import { MeetingDetail } from '@/features/meeting/MeetingDetail';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const qc = new QueryClient();                   // 요청별 격리 (서버)
-  await qc.prefetchQuery(meetingDetailQuery(id));  // browserClient 가 아니라 서버 queryFn 이 필요하면 별도 쿼리로
+  const qc = new QueryClient();                                 // 요청별 격리 (서버)
+  await qc.prefetchQuery(meetingDetailServerQuery(id));         // 서버 queryFn 사용
   return (
     <HydrationBoundary state={dehydrate(qc)}>
-      <MeetingDetail id={id} />
+      <MeetingDetail id={id} />                                 {/* 안에서 meetingDetailQuery 사용 */}
     </HydrationBoundary>
   );
 }
 ```
 
-- **주의**: `prefetchQuery` 에 쓰는 `queryFn` 은 서버 전용. 보통 **서버용 queries 파일** (`features/<domain>/serverQueries.ts`) 과 **클라용 queries 파일** 을 분리. 또는 queryFn 을 환경 비의존 (`publicApiClient`) 으로 작성 가능하면 공용.
+- **queryKey 는 두 파일이 동일** — 같은 key 로 서버→클라 데이터 승계.
+- queryFn 만 환경 전용으로 분리.
+- 공용 데이터이고 토큰 불필요하면 `publicApiClient` 를 쓰는 **단일 파일** 로 환경 비의존 queryFn 작성 가능.
 - 모든 페이지에 강제 적용 금지 — "서버에서 1차 랜더 → 클라에서 조작" 흐름이 명확할 때만.
 
 ---
@@ -450,10 +543,8 @@ export function meetingListQuery(filters: ListFilters) {
   return infiniteQueryOptions({
     queryKey: meetingKeys.list(filters),
     queryFn: ({ pageParam, signal }) =>
-      browserClient.get<MeetingPage>(
-        buildUrl('/meetings', { ...filters, cursor: pageParam }),
-        { signal },
-      ),
+      // path + params 두 인수로 전달 — URL 조립은 wrapper 안으로 숨긴다
+      browserClient.get<MeetingPage>('/meetings', { signal, params: { ...filters, cursor: pageParam } }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
@@ -462,6 +553,7 @@ export function meetingListQuery(filters: ListFilters) {
 
 - 백엔드가 `{ items, nextCursor }` shape 반환 가정.
 - offset/limit 방식보다 **중복/누락 없음**.
+- URL 조립은 **wrapper 가 담당** — `RequestOptions.params` 를 받아 `buildUrl` 호출. 호출자가 `buildUrl` 을 직접 쓰면 책임 분산.
 
 ### 8.2. 금지
 
@@ -498,6 +590,10 @@ export function meetingListQuery(filters: ListFilters) {
 - [ ] 호출 지점의 **환경** (서버/클라) 과 import 한 클라이언트가 **일치**하는가? (serverClient 를 `"use client"` 에서 import 금지)
 - [ ] **`'use cache'` 안에서 `cookies()`/`headers()`/`serverClient` 사용 없는가**? publicApiClient 또는 명시 익명 호출인가?
 - [ ] 사용자별 캐시가 **`userId` 를 함수 인수로** 받아 캐시 키 자동 격리하는가? `cacheTag` 는 **무효화용**으로만 쓰는가?
+- [ ] 사용자별 캐시 엔드포인트가 **익명 접근 가능** 또는 **서버 측 세션 재검증** 보장되는가? (아니면 캐시 금지 — 보안 사고 위험)
+- [ ] 401 refresh 가 **single-flight** 로 중복 호출 방지되는가? refresh 후 재요청도 401 이면 `logout()` + `SESSION_EXPIRED` 처리되는가?
+- [ ] Refresh 로직이 Server Action 이 아니라 **서버 전용 일반 함수** 로 분리됐는가? (Server Action 은 UI 호출용 wrapper)
+- [ ] `prefetchQuery` 가 **서버 전용 queryFn** (`serverClient` 또는 `publicApiClient`) 을 쓰는가? `browserClient` 쓰면 실행 실패.
 - [ ] `cacheLife` 가 데이터 성격에 맞게 설정됐는가 (`seconds`/`minutes`/`hours`/`days`/`weeks`/`max`)?
 - [ ] 쓰기 Server Action 이 **관련 cacheTag 를 `revalidateTag`** 로 무효화하는가?
 - [ ] 401 refresh 가 wrapper 안에서 **1회만** 재시도하는가 (호출자 중복 금지)?
