@@ -26,21 +26,94 @@ gh pr create --fill
 
 > 상세: [`docs/axis-decisions/operations.md`](docs/axis-decisions/operations.md) (이슈 #9)
 
-- **PR 자동 머지 금지** — GitHub `Auto-merge` / "Merge when ready" 체크 금지. **사람이 눌러야 머지**. (api 2026-10-14 사고 조항 그대로)
+- **PR 자동 머지 금지** — GitHub `Auto-merge` / "Merge when ready" 체크 금지. **사람이 눌러야 머지**. (api 2026-10-14 사고 조항 그대로). codex 리뷰 통과·`npm run lint && tsc --noEmit && npm test` 통과·CI 그린 — **어떤 조합도 머지 조건 아님**. 사용자 "머지해줘" 명시 승인만 유일한 머지 트리거.
 - **머지 방식: squash 고정** — "Create a merge commit" / "Rebase and merge" 금지.
-- **`main` 브랜치 보호** — 직접 push 금지, PR 필수. CI 통과 필수 조건은 CI workflow 생긴 뒤 활성화.
-- **PR 템플릿**: `.github/pull_request_template.md` — 요약·변경·테스트·codex 리뷰 상태·의존 이슈 포함.
-- **codex 외부 리뷰 필수**: 모든 PR 머지 전에 `codex-review-triage` 흐름 (6단계) 완료. 산출물 `codereview/<YYYYMMDD>/<slug>.md` (로컬 전용, `.gitignore`). 유효 지적만 반영, Claude triage 생략 금지. **사람 리뷰 대체 아님**.
+- **`main` 브랜치 보호** — 직접 push 금지, PR 필수. CI 통과 필수 조건은 CI workflow (`.github/workflows/ci.yml`) 생긴 뒤 활성화 — operations.md §2.4 로 defer.
+- **PR 템플릿**: [`.github/pull_request_template.md`](.github/pull_request_template.md) — 요약·변경·테스트·codex 리뷰 상태·의존 이슈 포함.
+- **codex 외부 리뷰 필수**: 모든 PR 머지 전에 [`codex-review-triage`](.claude/skills/codex-review-triage/SKILL.md) 흐름 (6단계) 완료. 상세는 아래 [하네스 § codex 외부 리뷰](#codex-외부-리뷰) 섹션.
 - **CI (예정)**: GitHub Actions. PR 당 `lint` + `tsc --noEmit` + `npm test` + 조건부 Playwright E2E. 실패 시 머지 블로킹. 커버리지 하드 게이트 없음.
 - **PR 리뷰 체크리스트**: 별도 문서 없음 — **이 CLAUDE.md 의 각 섹션 (API 통신·상태 관리·폼·에러·테스트·a11y·로깅 등) 이 그대로 체크리스트**. PR 리뷰 시 scan.
 - **작업 로그**: `.claude/work_history/` 미도입. 결정은 `docs/axis-decisions/`, 변경 이유는 커밋/PR, 구조는 CLAUDE.md. 중복 소스 금지.
-- **투명성 원칙**: 작업 중 상태 보고에 `▶` (진행 중) / `✅` (완료) / `🚧` (블로커·대기) 를 **의도적으로 사용**. 사용자가 흐름을 끊지 않고도 어디까지 왔는지 알 수 있도록.
 
-## 하네스 스킬 (`.claude/skills/`)
+## Claude Code 하네스
 
-- Next.js 코드·설정·캐시·라우팅·Server Actions·RSC·Tailwind 테마를 쓰거나 리뷰하기 전에 **[`nextjs16-reality-check`](.claude/skills/nextjs16-reality-check/SKILL.md)** 로드 필수. Opus/Sonnet 학습 지식이 Next 15 전제라 틀어지는 지점을 catch.
-- 다른 스킬은 Phase 3 에서 순차 추가 — `ts-style` (#14) / `app-router-layering` (#15) / `error-ux` (#16) / `data-fetching-guard` (#17) / `web-testing` (#18) / `web-security` (#19) / 신규 축 묶음 (#20).
-- codex 외부 리뷰는 Phase 2 포팅 대상 — api 리포의 `codex-review-triage` 를 그대로 복제 (#9, #11).
+이 리포는 `.claude/` 하네스를 포함한다. 로컬 스킬·에이전트·커맨드 정의 위치 (SSOT).
+
+```text
+.claude/
+├─ skills/<이름>/SKILL.md     # 로컬 스킬 (work-manager, codex-review-triage, 축별 가드)
+├─ agents/<이름>.md           # 전문 에이전트 (issue-kickoff, brainstormer, plan-writer, pr-review-check)
+└─ settings.json              # 공유 허용 툴·env
+
+# 개인 오버라이드 (gitignore)
+.claude/settings.local.json
+```
+
+> **work_history 미도입** — api 리포와 달리 작업 로그 폴더를 두지 않는다 ([operations.md §2.3](docs/axis-decisions/operations.md)). 상태는 **GitHub 라벨 + PR body + 커밋 메시지** 로 추적.
+
+### 작업 진입점: work-manager
+
+GitHub Issue URL / `#N` / PR URL 로 작업을 시작할 때 [`.claude/skills/work-manager/SKILL.md`](.claude/skills/work-manager/SKILL.md) 를 진입점으로 사용.
+
+- **Issue 입력** → `_issue-flow.md` (브랜치 분기 → 라벨 전환 → 전문 에이전트 핸드오프)
+- **PR 입력** → `_pr-flow.md` (메타 조회 → 유형 판정 → codex 리뷰 → 사용자 승인 후 squash merge)
+- **복잡 작업 (FEAT·REFACTOR·PERF)** 은 전문 에이전트 호출 전에 `brainstormer` (접근 2~3개 trade-off) → `plan-writer` (`docs/plans/` 에 Task 쪼개서 저장) → 사용자 승인 게이트. DOC·간단 CHORE 는 skip.
+
+### 에이전트 1-depth 원칙
+
+**전문 에이전트는 `Agent` 툴로 호출하지 않는다** — Claude Code 가 `.claude/agents/<name>.md` 를 **Read 후 직접 실행**한다. 중첩 호출 금지로 투명성·디버깅 가능성 확보.
+
+| 에이전트 | 책임 | 호출 시점 |
+|---|---|---|
+| [`issue-kickoff`](.claude/agents/issue-kickoff.md) | 이슈 조회 + 결정적 slug + 브랜치 분기 | `_issue-flow` Step 1 |
+| [`brainstormer`](.claude/agents/brainstormer.md) | 접근 방식 2~3개 생성·수집 | `_issue-flow` Step 3 (복잡 작업만) |
+| [`plan-writer`](.claude/agents/plan-writer.md) | 상세 플랜 + 사용자 승인 수집 | `_issue-flow` Step 4 (대부분 작업) |
+| [`pr-review-check`](.claude/agents/pr-review-check.md) | PR 메타 + 리뷰 체크리스트 | `_pr-flow` Step 1·4 |
+
+> 전문 developer 에이전트 (`feat-developer` / `fix-developer` / `refactor-developer` / `doc-updater`) 는 아직 미포팅 — 첫 FEAT/FIX 작업 때 추가.
+
+### 투명성 원칙
+
+work-manager 및 모든 하위 에이전트는 아래 포맷을 **의도적으로** 사용한다. 사용자가 흐름을 끊지 않고도 어디까지 왔는지 알 수 있도록.
+
+| 기호 | 의미 | 예시 |
+|---|---|---|
+| `▶` | 단계 시작 — 하려는 작업 한 줄 | `▶ [Step 1] issue-kickoff — 이슈 #42 조회 및 브랜치 분기` |
+| `✅` | 단계 완료 — 결과 한 줄 | `✅ [Step 1] 브랜치: chore/42-sample (base: main, HEAD: abc1234)` |
+| `🚧` | 병목 발생 — 즉시 사용자에게 보고 | `🚧 [Step 3] codex CLI 미설치 — 설치 안내 필요` |
+
+> **침묵 금지**. "⋯ 작업 중" 같은 모호한 메시지로 넘어가지 않는다. 지금 어느 단계에서 왜 멈췄는지가 항상 우선.
+
+### codex 외부 리뷰
+
+PR 생성 후 **codex CLI** 를 헤드리스 호출해 2차 리뷰를 받고, Claude 가 각 지적을 원문 대조·평가 (triage) 해 유효한 것만 반영. 사람 리뷰와 병행하는 보조 레인.
+
+- 상세 흐름·프롬프트: [`.claude/skills/codex-review-triage/SKILL.md`](.claude/skills/codex-review-triage/SKILL.md)
+- 산출물: `codereview/<YYYYMMDD>/<slug>.md` (slug = 브랜치명 `/`→`-`) — **`.gitignore` 적용, 로컬 전용 아카이브**
+- **반영 후 서버 검증 필수**:
+  - **L0** — `.claude/`·`CLAUDE.md`·`docs/` 만 변경: 생략 가능 (`Verified: L0 skipped — doc-only change`)
+  - **L1** — `src/` 하위 코드 변경: `npm run lint && npx tsc --noEmit && npm test`
+  - **L2** — 라우팅·보안·API 클라이언트·토큰 흐름 변경: L1 + `npm run test:e2e`
+- 커밋 메시지에 `Verified: L<N> — <command> (passed)` 라인 포함.
+- **금지**: Jira·외부 티켓 경로 사용 / codex 의 `-s read-only` 외 샌드박스 / Claude triage 생략 / 서버 검증 생략한 push / 사람 리뷰 대체.
+
+### 하네스 자가 수정 주의
+
+`.claude/` 아래 파일은 에이전트 자가 수정 대상으로 분류돼 자동 승인에서 종종 차단된다. 해당 경로를 수정하는 PR 은 반드시 사람이 리뷰한다.
+
+### 하네스 스킬 목록
+
+| 스킬 | 로드 시점 |
+|---|---|
+| [`nextjs16-reality-check`](.claude/skills/nextjs16-reality-check/SKILL.md) | **Next.js 코드·설정·캐시·라우팅·Server Actions·RSC·Tailwind 테마 쓰기/리뷰 전 필수**. Opus/Sonnet 학습 지식이 Next 15 전제라 틀어지는 지점 catch |
+| [`ts-style`](.claude/skills/ts-style/SKILL.md) | TypeScript/TSX 쓰거나 리뷰할 때 (ESLint 외 사람 판단 영역) |
+| [`app-router-layering`](.claude/skills/app-router-layering/SKILL.md) | 새 라우트·피처·공용 모듈 작성·리뷰 |
+| [`data-fetching-guard`](.claude/skills/data-fetching-guard/SKILL.md) | fetch wrapper·`'use cache'`·React Query 패턴 |
+| [`error-ux`](.claude/skills/error-ux/SKILL.md) | 에러 바운더리·`ApiError`·Server Action 오류·토스트 |
+| [`web-testing`](.claude/skills/web-testing/SKILL.md) | Vitest·MSW·Playwright 테스트 작성 |
+| [`web-security`](.claude/skills/web-security/SKILL.md) | 토큰 저장·전달·PII 마스킹·CSP·녹음 데이터 보안 |
+| [`a11y`](.claude/skills/a11y/SKILL.md) · [`i18n`](.claude/skills/i18n/SKILL.md) · [`design-tokens`](.claude/skills/design-tokens/SKILL.md) · [`perf-budget`](.claude/skills/perf-budget/SKILL.md) | 접근성·국제화·토큰·번들 가드 (UI 작성 시) |
+| [`work-manager`](.claude/skills/work-manager/SKILL.md) · [`codex-review-triage`](.claude/skills/codex-review-triage/SKILL.md) | 하네스 운영 (위 § 작업 진입점 / § codex 외부 리뷰 참조) |
 
 ## 기술 스택
 
